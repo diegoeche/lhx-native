@@ -1,0 +1,18 @@
+# Hit Squad unpacked module SHA256:
+# 4d30628da15b38eb93cad06420d255574db7283cfec4292f9bfbc8b9d4369f9e
+# Image-relative CS:IP entries observed as real native callback targets.
+# The generator verifies the complete module hash before using this profile.
+0fd1:9ea9 # Unrolled renderer initialization, DS:[count*2+084a], runtime trace
+0fd1:a4a1 # Renderer callback observed in native model drawing, runtime trace
+0fd1:aa76 # Model renderer callback observed in native runtime, image1a786
+0fd1:ac24 # Model renderer callback observed after frame-unwind fix, image1a934
+0fd1:abc5 # Primitive kind2 (point), verified DS:083e method table and fn19d04
+0fd1:acb8 # Primitive kind4 (custom), verified DS:083e method table and fn19d04
+26af:004c # Original IRQ9 keyboard handler installed through INT21/25 and exercised by Enter
+2e44:135c # Resource file I/O callback exercised after leaving title via Enter
+1e4b:0171 # Menu callback exercised by fn1e4b0 after leaving the title screen
+2e44:130f # Resource file I/O callback exercised after Free Flight mission initialization
+0fd1:8820 # Installed INT0 projection saturation handler, exercised by aircraft preview overflow
+2e44:1172 # Verified resource callback pool in fn2e7d3 (planar image output)
+2e44:1221 # Verified resource callback pool in fn2e7d3 (alternate image format)
+0fd1:dad4 # Aircraft preview/menu callback observed after briefing and handled projection overflow

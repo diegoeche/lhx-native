@@ -1,0 +1,23 @@
+/bin/
+/build/
+/.local/
+/saves/
+__pycache__/
+*.pyc
+/dist/
+# Game media, extracted assets and local diagnostics outside the standard dirs.
+*.iso
+*.ISO
+*.exe
+*.EXE
+*.lib
+*.LIB
+*.ram
+*.ppm
+*.lhp
+*.lhc
+*.lht
+*.lhr
+*.lhs
+*.glb
+*.i16

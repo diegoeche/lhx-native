@@ -1,0 +1,5 @@
+# Local agent coordination stays in the canonical development checkout.
+/AGENTS.md export-ignore
+
+* text=auto
+*.png -text

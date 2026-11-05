@@ -1,0 +1,61 @@
+PCRecomp decoder, lifter and CPU helpers
+  Upstream: https://github.com/sp00nznet/pcrecomp
+  Revision: ef3f0da6e08a8eb7a3f869273f3df071ca8d7373
+  License: MIT; see third_party/pcrecomp/LICENSE
+
+Function-discovery approach adapted from Wolf3D Recomp
+  Upstream: https://github.com/sp00nznet/wolf3d-recomp
+  Revision: 6cf7c20dc891721d5beaecf1c9c4682e0468948b
+  License: MIT; see third_party/wolf3d-recomp.LICENSE
+
+LHX: Attack Chopper — GPU 3D, by kznsq
+  https://github.com/kznsq/lhx-attack-chopper-gpu
+  Revision: 2321564357025483a8e7db4d27e582193b274b38
+  License: MIT; see third_party/lhx-gpu-reference.LICENSE
+  Original-engine scene layouts, capture/compositing strategy and model
+  rendering research informed the native C renderer in runtime/scene_*.c.
+  Referenced code includes src/capture.js, src/composite.js, src/reach.js
+  and web/gpu.js. The floating-point world traversal and measurements here
+  build on that research while preserving the original simulation state.
+  Enhanced-mode art, geographic datasets and three.js are not included here.
+  Optional face lighting, generated runway textures and flat satellite ground
+  adapt web/gpu.js (Relief.shade, Runways.concrete, Terrain) and src/theatre.js.
+  Their native implementations are in runtime/scene_renderer.c,
+  runtime/scene_texture.c and runtime/scene_assets.c.
+  The optional tools/import_terrain.py reads reference images
+  into ignored local textures; assets are not redistributed in this repository.
+  Horizon haze, static scenery mappings and bounds fitting also adapt
+  web/gpu.js (PhotoSky, Props). Optional scenery is prepared locally from the
+  reference Kenney Nature, Survival, Industrial and Suburban kits (CC0);
+  tools/import_scenery.py retains source hashes and local licence files.
+  Native visual relief, terrain mounds, service paint, surface patterns, rotor
+  recognition/blades and sun/contact shadows adapt TerrainGrid, hillMounds,
+  Relief, militaryPaint, withSurfaceDetail, rotorDiscs, GPUView.blades and
+  Props.addShadow in web/gpu.js. Native runway detail adapts Runway.concrete,
+  Runway.texture and Runway.add; heading lettering uses local bitmap digits.
+  tools/import_relief.py retains reference metadata/data hashes and attribution.
+  This project's CPU interpreter is not used.
+
+Optional photo skies (imported locally from the reference checkout)
+  Poly Haven, CC0; https://polyhaven.com/license
+  Day: Kloofendal 48d Partly Cloudy (Pure Sky), Greg Zaal and Jarod Guest
+    https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+  Night: Qwantani Night (Pure Sky)
+    https://polyhaven.com/a/qwantani_night_puresky
+  tools/import_skies.py retains the reference SOURCE.txt and image hashes in
+  ignored bin/enhanced/sky/. Panoramas are not redistributed in this repository.
+
+Optional satellite imagery (imported locally from the reference checkout)
+  Sentinel-2 cloudless 2016 by EOX IT Services GmbH
+  Contains modified Copernicus Sentinel data 2016; CC BY 4.0.
+  Source: https://s2maps.eu
+  Geographic fit/place coordinates: OpenStreetMap contributors, ODbL.
+  Prepared texture source hashes, attribution and reference bounds are retained
+  in bin/enhanced/terrain/SOURCE.json by tools/import_terrain.py.
+  Visual elevation: Terrain Tiles, AWS Open Data (Mapzen terrarium), from SRTM,
+  GMTED and other source datasets recorded by the reference. Original source
+  metadata and height-grid hashes are retained in RELIEF-SOURCE.json by
+  tools/import_relief.py; elevation files are not redistributed here.
+
+Game executables, data files and generated C are supplied/derived locally and
+excluded from version control.
