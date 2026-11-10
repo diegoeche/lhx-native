@@ -101,6 +101,10 @@ add_test(NAME native-flight COMMAND "${Python3_EXECUTABLE}"
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/flight_smoke.py"
   --binary "$<TARGET_FILE:lhx-native>" --data-dir "${LHX_DATA}")
 set_tests_properties(native-flight PROPERTIES TIMEOUT 100)
+add_test(NAME native-tow COMMAND "${Python3_EXECUTABLE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/tow_smoke.py"
+  --binary "$<TARGET_FILE:lhx-native>" --data-dir "${LHX_DATA}")
+set_tests_properties(native-tow PROPERTIES TIMEOUT 120)
 add_test(NAME native-render COMMAND "${Python3_EXECUTABLE}"
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_smoke.py"
   --binary "$<TARGET_FILE:lhx-native>" --data-dir "${LHX_DATA}")

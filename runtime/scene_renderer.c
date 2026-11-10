@@ -4,6 +4,7 @@
 #include "scene_props.h"
 #include "scene_sky.h"
 #include "scene_relief.h"
+#include "scene_motion.h"
 #include "scene_surface.h"
 
 #include <float.h>
@@ -85,6 +86,9 @@ typedef struct {
 
 static int inverse(const double m[3][3],double out[3][3]);
 static Scratch scratch;
+static LhxSceneMotion aircraft_motion;
+static LhxSceneView motion_view;
+static int has_motion_view;
 static LhxTexture runway_texture;
 static struct {LhxTexture texture;int length,width,bearing;} runway_details[8];
 static unsigned runway_cursor;
@@ -106,6 +110,8 @@ static int finite_vertex(const LhxSceneVertex *v)
 
 void lhx_scene_renderer_reset(void)
 {
+    lhx_scene_motion_reset(&aircraft_motion);
+    has_motion_view=0;
     lhx_texture_free(&runway_texture);
     for(unsigned i=0;i<8;i++)lhx_texture_free(&runway_details[i].texture);
     memset(runway_details,0,sizeof runway_details);runway_cursor=0;
@@ -835,6 +841,44 @@ static void ground_triangle(Render *r,TextureVertex a,TextureVertex b,TextureVer
     else draw_triangle(r,a.p,b.p,c.p,color,one_sided,stipple,bias);
 }
 
+static const LhxTexture *parcel_ground_texture(Render *r,const LhxSceneMesh *mesh,
+                                               const LhxScenePrimitive *p,unsigned count)
+{
+    /* Integrate the approved ground materials with the satellite imagery;
+     * retain their footprint, depth and relief placement. Match both model
+     * and material so paving, lines and unrelated scenery keep their colors. */
+    if(mesh->texture || mesh->layer!=1 || !mesh->has_placement ||
+       p->stipple ||
+       !r->view->has_camera || !r->options || !r->options->terrain)return NULL;
+    if(!((p->color==125 && !strcmp(mesh->model_name,"city")) ||
+         (p->color==10 && !strcmp(mesh->model_name,"square1")) ||
+         (p->color==6 && !strcmp(mesh->model_name,"square2")) ||
+         (p->color==3 && !strcmp(mesh->model_name,"square3"))))return NULL;
+    if(!inverse(r->view->world_to_view,r->inverse_basis))return NULL;
+    const LhxTerrain *terrain=r->options->terrain;
+    const LhxTerrainGrid *grids[]={&terrain->near,&terrain->far};
+    for(unsigned g=0;g<2;g++){
+        const LhxTerrainGrid *grid=grids[g];
+        if(!grid->texture.count || !grid->texture.levels[0].pixels ||
+           grid->bounds[0]>=grid->bounds[1] || grid->bounds[2]>=grid->bounds[3])continue;
+        unsigned i=0;
+        for(;i<count;i++){
+            Vec3 q=scratch.polygon[i];
+            double x=r->view->camera[0]+r->inverse_basis[0][0]*q.x+
+                r->inverse_basis[0][1]*q.y+r->inverse_basis[0][2]*q.z;
+            double z=r->view->camera[2]+r->inverse_basis[2][0]*q.x+
+                r->inverse_basis[2][1]*q.y+r->inverse_basis[2][2]*q.z;
+            if(x<grid->bounds[0] || x>grid->bounds[1] ||
+               z<grid->bounds[2] || z>grid->bounds[3])break;
+            scratch.uvs[i]=(LhxSceneUV){(x-grid->bounds[0])/(grid->bounds[1]-grid->bounds[0]),
+                (grid->bounds[3]-z)/(grid->bounds[3]-grid->bounds[2])};
+        }
+        if(i==count)return &grid->texture;
+    }
+    /* An absent pack or a parcel outside its coverage keeps the legacy face. */
+    return NULL;
+}
+
 static int draw_polygon(Render *r, const LhxSceneMesh *mesh, unsigned number)
 {
     const LhxScenePrimitive *p = &mesh->primitives[number];
@@ -876,7 +920,10 @@ static int draw_polygon(Render *r, const LhxSceneMesh *mesh, unsigned number)
     /* Keep the bias bounded even for unusually dense, nearly coplanar meshes. */
     double bias = fmin(face->rank * DECAL_BIAS, 0.02);
     double shade=1;
-    if (r->options && r->options->lighting && r->view->has_camera && mesh->layer==2) {
+    /* The logo mixes filled letter bodies and decorative lines in one palette
+     * color. Keep its typography unlit, including in the captured camera view. */
+    if (r->options && r->options->lighting && r->view->has_camera && mesh->layer==2 &&
+        strcmp(mesh->model_name,"logo")) {
         /* A normal transforms with R transpose back to world space. This also
          * handles the authored camera's nonuniform scaling without headlight drift. */
         const double (*m)[3]=r->view->world_to_view;
@@ -914,8 +961,10 @@ static int draw_polygon(Render *r, const LhxSceneMesh *mesh, unsigned number)
     if(r->sink && r->sink->material && !r->sink->material(r->sink_context,r->detail,0))r->emit_failed=1;
     if (shade!=1) color=tint_color(color,shade);
     r->texture=mesh->texture;r->tint=r->detail?1:shade;r->material_color=color;
+    const LhxTexture *ground=parcel_ground_texture(r,mesh,p,count);
+    if(ground){r->texture=ground;r->tint=r->daylight;}
     for (unsigned i = 0; i < triangles; i += 3) {
-        if (mesh->texture || r->detail) {
+        if (r->texture || r->detail) {
             TextureVertex v[3];
             for (unsigned j=0;j<3;j++) {
                 unsigned k=scratch.triangles[i+j];
@@ -972,16 +1021,16 @@ static void line_sample(Render *r, int x, int y, Screen from, double dx,
         put_pixel(r, x, y, from.q + qdelta * t, color, stipple, LINE_BIAS);
 }
 
-static void draw_line(Render *r, Vec3 a, Vec3 b, uint32_t color, int stipple)
+static void draw_line(Render *r, Vec3 a, Vec3 b, uint32_t color, int stipple, float authored_width)
 {
     if(r->drape){
         unsigned n=(unsigned)fmin(4096,fmax(1,ceil(hypot(hypot(b.x-a.x,b.y-a.y),b.z-a.z)/400)));
         r->drape=0;for(unsigned i=0;i<n;i++)draw_line(r,draped(r,between(a,b,(double)i/n)),
-            draped(r,between(a,b,(double)(i+1)/n)),color,stipple);r->drape=1;return;
+            draped(r,between(a,b,(double)(i+1)/n)),color,stipple,authored_width);r->drape=1;return;
     }
     if (r->sink) {
         if (!r->sink->line(r->sink_context,(LhxSceneVertex){a.x,a.y,a.z},
-                           (LhxSceneVertex){b.x,b.y,b.z},color,stipple)) r->emit_failed=1;
+                           (LhxSceneVertex){b.x,b.y,b.z},color,stipple,authored_width)) r->emit_failed=1;
         return;
     }
     if (!clip_line(r, &a, &b))
@@ -991,7 +1040,7 @@ static void draw_line(Render *r, Vec3 a, Vec3 b, uint32_t color, int stipple)
     double length2 = dx * dx + dy * dy;
     double radius = fmax(0.5, 0.4 * fmin(r->sx, r->sy));
     int smooth=r->options && r->options->antialiasing;
-    if (smooth) radius=0.5;
+    if (smooth) radius=fmax(0.5,0.5*authored_width*fmin(r->sx,r->sy));
     double extent=radius+(smooth?0.5:0);
     int x0 = lower_pixel(fmin(from.x, to.x) - extent, r->x0, r->x1);
     int x1 = lower_pixel(fmax(from.x, to.x) + extent, r->x0, r->x1);
@@ -1270,9 +1319,14 @@ static int draw_placed_mesh(Render *r, const LhxSceneMesh *mesh)
                 return 0;
             break;
         case 1:
+            /* Preserve one original pixel of stroke for the logo and gun
+             * tracers. AA otherwise reduces these to one output pixel even
+             * on an 8x canvas. Scenery seams/cables keep their thin path. */
             for (unsigned j = 1; j < p->count; j++)
                 draw_line(r, vertex(&mesh->vertices[p->indices[j - 1]]),
-                             vertex(&mesh->vertices[p->indices[j]]), color, p->stipple);
+                             vertex(&mesh->vertices[p->indices[j]]), color, p->stipple,
+                             !strcmp(mesh->model_name,"logo") ||
+                             !strcmp(mesh->model_name,"bullet")?1.f:0.f);
             break;
         case 2:
             for (unsigned j = 0; j < p->count; j++)
@@ -1305,7 +1359,26 @@ static int hill(const char *name){return !strcmp(name,"hill1") || !strcmp(name,"
 static const LhxSceneMesh *place_mesh(Render *r,const LhxSceneMesh *original,LhxSceneMesh *placed)
 {
     r->drape=0;r->subdivisions=0;
-    if(!r->relief)return original;
+    double offset[3]={0};
+    if(r->options && r->options->smooth_distant_aircraft && original->has_placement &&
+       r->view->has_camera && r->view->x0==0 && r->view->x1==320 &&
+       model_kind(original->model_name)==1){
+        if(!has_motion_view || motion_view.x0!=r->view->x0 || motion_view.x1!=r->view->x1 ||
+           motion_view.y0!=r->view->y0 || motion_view.y1!=r->view->y1 ||
+           motion_view.cx!=r->view->cx || motion_view.cy!=r->view->cy){
+            lhx_scene_motion_reset(&aircraft_motion);motion_view=*r->view;has_motion_view=1;
+        }
+        uint32_t model=2166136261u;
+        for(const unsigned char *p=(const unsigned char *)original->model_name;*p;p++)
+            model=(model^*p)*16777619u;
+        uint64_t identity=original->object_id?((uint64_t)original->object_id<<32)|model:0;
+        double dx=original->world_origin[0]-r->view->camera[0];
+        double dy=original->world_origin[1]-r->view->camera[1];
+        double dz=original->world_origin[2]-r->view->camera[2];
+        lhx_scene_motion_offset(&aircraft_motion,1,identity,original->world_origin,
+            hypot(hypot(dx,dy),dz),r->options->time_seconds,offset);
+    }
+    if(!r->relief && offset[0]==0 && offset[1]==0 && offset[2]==0)return original;
     if(!strcmp(original->model_name,"stars")){
         *placed=*original;for(unsigned i=0;i<original->vertex_count;i++)scratch.placed[i]=(LhxSceneVertex){
             original->vertices[i].x*10000,original->vertices[i].y*10000,original->vertices[i].z*10000};
@@ -1314,18 +1387,27 @@ static const LhxSceneMesh *place_mesh(Render *r,const LhxSceneMesh *original,Lhx
     if(!original->has_placement)return original;
     int finite_sphere=0;for(unsigned i=0;i<original->primitive_count;i++)
         if(original->primitives[i].kind==3 && original->primitives[i].radius>0)finite_sphere=1;
-    if(original->layer<2 && !finite_sphere && strcmp(original->model_name,"stars")){
+    /* Layer zero also contains distant point LODs of airborne objects. Only
+     * ground polygons and the reference grid may lose their authored altitude
+     * when following relief; point LODs use the same placement as solid models. */
+    int ground_marking=original->layer==1 ||
+        (original->layer==0 && !strcmp(original->model_name,"spheres"));
+    if(r->relief && ground_marking && !finite_sphere){
         r->drape=1;return original;
     }
     if(!strcmp(original->model_name,"stars"))return original;
     *placed=*original;
-    double d=lhx_relief_height(r->options->terrain,original->world_origin[0],original->world_origin[2])-
-        lhx_relief_height(r->options->terrain,r->view->camera[0],r->view->camera[2]);
-    LhxPropFit fit;
-    if(!lhx_props_select(r->options->props,original,&fit))
-        d+=fmax(0,-original->world_origin[1]-original->model_bounds[2]);
+    for(unsigned i=0;i<3;i++)placed->world_origin[i]+=offset[i];
+    if(r->relief){
+        offset[1]+=lhx_relief_height(r->options->terrain,placed->world_origin[0],placed->world_origin[2])-
+            lhx_relief_height(r->options->terrain,r->view->camera[0],r->view->camera[2]);
+        LhxPropFit fit;
+        if(!lhx_props_select(r->options->props,original,&fit))
+            offset[1]+=fmax(0,-placed->world_origin[1]-original->model_bounds[2]);
+    }
     double shift[3];for(unsigned i=0;i<3;i++){
-        shift[i]=r->view->world_to_view[i][1]*d;placed->model_to_view[i][3]+=shift[i];
+        shift[i]=0;for(unsigned j=0;j<3;j++)shift[i]+=r->view->world_to_view[i][j]*offset[j];
+        placed->model_to_view[i][3]+=shift[i];
     }
     for(unsigned i=0;i<original->vertex_count;i++)scratch.placed[i]=(LhxSceneVertex){
         original->vertices[i].x+shift[0],original->vertices[i].y+shift[1],original->vertices[i].z+shift[2]};
@@ -1333,6 +1415,8 @@ static const LhxSceneMesh *place_mesh(Render *r,const LhxSceneMesh *original,Lhx
 }
 static int draw_mesh(Render *r,const LhxSceneMesh *mesh)
 {
+    if(r->options && r->options->hide_ground_dots && mesh->layer==0 &&
+       !strcmp(mesh->model_name,"spheres"))return 1;
     if(r->relief && hill(mesh->model_name))return 1;
     LhxSceneMesh placed;mesh=place_mesh(r,mesh,&placed);
     r->detail_kind=r->options && mesh->has_placement?model_kind(mesh->model_name):0;
@@ -1431,6 +1515,29 @@ static void clear_depth(const Render *r)
                 (size_t)(r->x1 - r->x0) * sizeof *scratch.depth);
 }
 
+/* Panorama longitude repeats; ordinary scenery textures retain edge clamping. */
+static uint32_t sky_level(const LhxTextureLevel *level,double u,double v)
+{
+    if(!level->pixels || !level->width || !level->height)return 0;
+    double x=(u-floor(u))*level->width-.5;
+    int column=(int)floor(x);
+    unsigned x0=(column+(int)level->width)%level->width,x1=(x0+1)%level->width;
+    double y=fmax(0,fmin(level->height-1,v*level->height-.5));
+    unsigned y0=(unsigned)y,y1=y0+1<level->height?y0+1:y0;
+    unsigned fx=(unsigned)((x-column)*256+.5),fy=(unsigned)((y-y0)*256+.5);
+    return mix_color(mix_color(level->pixels[y0*level->width+x0],level->pixels[y0*level->width+x1],fx),
+                     mix_color(level->pixels[y1*level->width+x0],level->pixels[y1*level->width+x1],fx),fy);
+}
+
+static uint32_t sky_sample(const LhxTexture *texture,double u,double v,double footprint)
+{
+    if(!texture || !texture->count || texture->count>13 || !isfinite(u) || !isfinite(v))return 0;
+    double lod=fmin(texture->count-1,log2(fmax(1,footprint)));
+    unsigned a=(unsigned)lod,b=a+1<texture->count?a+1:a;
+    return mix_color(sky_level(texture->levels+a,u,v),sky_level(texture->levels+b,u,v),
+                     (unsigned)((lod-a)*256+.5));
+}
+
 static void draw_horizon(Render *r, const LhxSceneHorizon *horizon)
 {
     uint32_t a = r->colors[horizon->colors[0] & 255];
@@ -1454,7 +1561,7 @@ static void draw_horizon(Render *r, const LhxSceneHorizon *horizon)
                     double v=.5-elevation/3.14159265358979323846;
                     double footprint=fmax(r->panorama->levels[0].width/(6.2831853*r->focus*r->sx),
                         r->panorama->levels[0].height/(3.14159265*Y_SCALE*r->focus*r->sy));
-                    base=tint_color(lhx_texture_sample(r->panorama,u,v,footprint),.78);
+                    base=tint_color(sky_sample(r->panorama,u,v,footprint),.78);
                 }
                 r->pixels[index]=r->atmosphere?
                     lhx_atmosphere_mix(base,r->haze,1-exp(-fabs(elevation)*40)):base;
@@ -1611,6 +1718,9 @@ static void smooth_edges(Render *r)
 
 static LhxSceneView enhanced_view(const LhxSceneView *view,const LhxSceneRenderOptions *options)
 {
+    if(has_motion_view && (!options || !options->smooth_distant_aircraft)){
+        lhx_scene_motion_reset(&aircraft_motion);has_motion_view=0;
+    }
     LhxSceneView result=*view;
     /* Target-display windows contain captured world models; the attitude ball
      * has no models and must retain its original independently cached horizon. */

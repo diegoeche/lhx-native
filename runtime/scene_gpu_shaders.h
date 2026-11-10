@@ -168,9 +168,15 @@ static const char *gpu_horizon_fragment="#version 330 core\n" LHX_CAMERA LHX_ATM
           (camera_projection.y-source.y)/(camera_projection.z*0.9375),1));
    float elevation=asin(clamp(ray.y,-1,1));
    vec3 base=ray.y>=0?sky_color.rgb:terrain_loaded!=0 && enhanced_horizon!=0?haze_color:ground_color.rgb;
-   if(ray.y>=0 && photo_sky!=0){
-     vec2 uv=vec2(0.5+atan(ray.x,ray.z)/6.283185307,0.5-elevation/3.141592654);
-     base=texture(sky_image,uv).rgb*0.78;
+   if(photo_sky!=0){
+     /* This branch is uniform. Evaluate derivatives on both sides of the
+      * horizon; the longitude discontinuity must not select a global mip. */
+     float horizontal=length(ray.xz);
+     float longitude=horizontal>0.00000001?atan(ray.x,ray.z):0.0;
+     vec2 uv=vec2(0.5+longitude/6.283185307,0.5-elevation/3.141592654);
+     vec2 dx=dFdx(uv),dy=dFdy(uv);
+     dx.x-=floor(dx.x+0.5);dy.x-=floor(dy.x+0.5);
+     if(ray.y>=0)base=textureGrad(sky_image,uv,dx,dy).rgb*0.78;
    }
    result=vec4(enhanced_horizon!=0?mix(base,haze_color,exp(-abs(elevation)*40.0)):base,1);return;
  }

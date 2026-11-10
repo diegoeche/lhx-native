@@ -39,6 +39,11 @@ static unsigned missing, bios_ticks, eois, tone_writes;
 static uint16_t timer_divisor;
 static uint8_t speaker_gate, timer_low;
 static int timer_high;
+static unsigned observed;
+static LhxAudioSnapshot latest;
+static void observe(const LhxAudioSnapshot *snapshot,void *unused) {
+    (void)unused;observed++;latest=*snapshot;
+}
 void recomp_tick(CPU *c) { (void)c; g_recomp_tick_budget=500; }
 void recomp_unhandled(CPU *c,uint16_t seg,uint16_t off,const char *why) {
     (void)c; (void)seg; (void)off; (void)why; missing++;
@@ -89,7 +94,13 @@ int main(int argc,char**argv) {
         api(&c,seg,0x0e,0,0,0);assert(c.ax==1);
         assert(mem_read16(&c,0,0x20)==0x363 && mem_read16(&c,0,0x22)==seg);
         assert(timer_divisor==0x13b1);
+        CPU reference=c;reference.mem=malloc(MEM_SIZE);assert(reference.mem);
+        memcpy(reference.mem,c.mem,MEM_SIZE);
+        lhx_audio_observe(NULL,NULL);
+        api(&reference,seg,0,1,100,0);
+        lhx_audio_observe(observe,NULL);
         api(&c,seg,0,1,100,0);assert(c.ax==1);
+        assert(!memcmp(c.mem,reference.mem,MEM_SIZE));free(reference.mem);
         for(unsigned tick=0;tick<13;tick++) {
             uint16_t sp=c.sp,cs=c.cs,ip=c.ip;
             push16(&c,c.flags);push16(&c,c.cs);push16(&c,0xffff);
@@ -97,10 +108,23 @@ int main(int argc,char**argv) {
             assert(c.sp==sp && c.cs==cs && c.ip==ip);
         }
         assert(mem_read8(&c,seg,0x4ec)==13);
+        assert(observed>=14 && latest.voices[1].active);
+        assert(latest.voices[1].effect==1 && latest.voices[1].divisor>0);
+        api(&c,seg,0,0,65,0);api(&c,seg,6,0,0,0);
+        assert(latest.voices[3].active && latest.voices[3].effect==0);
+        assert(latest.voices[3].divisor==65);
+        api(&c,seg,4,0,5,0);assert(latest.voices[3].divisor==5);
+        api(&c,seg,0,15,3,0);api(&c,seg,6,0,0,0);
+        assert(latest.voices[2].active && latest.voices[2].effect==15);
+        assert(latest.voices[3].active);
+        api(&c,seg,0x18,0x90,60,1);api(&c,seg,6,0,0,0);
+        assert(latest.voices[2].active && latest.voices[2].effect==20);
         api(&c,seg,0x08,0,0,0);assert((speaker_gate&3)==0);
+        for(unsigned i=0;i<LHX_AUDIO_VOICES;i++)assert(!latest.voices[i].active);
         api(&c,seg,0x0a,0,0,0);assert(mem_read8(&c,seg,0x502)==1);
         api(&c,seg,0x0c,0,0,0);assert(mem_read8(&c,seg,0x502)==0);
         api(&c,seg,0x10,0,0,0);assert(c.ax==1);
+        for(unsigned i=0;i<LHX_AUDIO_VOICES;i++)assert(!latest.voices[i].active);
         assert(mem_read16(&c,0,0x20)==8 && mem_read16(&c,0,0x22)==0xf000);
         assert((speaker_gate&3)==0);
     }
@@ -108,6 +132,7 @@ int main(int argc,char**argv) {
     assert(lhx_audio_dispatch(&c,0x2000,0)==0);
     assert(lhx_audio_dispatch(&c,0x6000,0x500)==1 && missing==1);
     c.mem[0x60000]^=1;assert(lhx_audio_dispatch(&c,0x6000,0)==0);
+    lhx_audio_observe(NULL,NULL);
     free(c.mem);puts("native audio API and IRQ chain passed");
 }
 ''')

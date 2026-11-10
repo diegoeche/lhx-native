@@ -46,9 +46,11 @@ visibility = extended
 show_fps = false
 antialiasing = true
 sphere_depth = true
+hide_ground_dots = true
+smooth_distant_aircraft = true
 atmosphere = true
 photo_skies = true
-sky_dir = bin/enhanced/sky
+sky_dir = bin/enhanced/sky-subtle
 replacement_models = true
 models_dir = bin/enhanced/models
 lighting = true
@@ -93,6 +95,21 @@ world views share enabled enhancements. Each upgrade works
 independently, with either visibility mode; `renderer = original` uses the
 original drawing path.
 
+`hide_ground_dots = true` removes the original grid of ground-reference dots
+from the native CPU and GPU views. Stars, smoke and distant scenery keep their
+normal drawing. Set it to `false`, or omit it, to retain the original dots.
+
+`smooth_distant_aircraft = true` smooths the original simulation's sparse updates
+of distant aircraft. It affects the main native CPU/GPU view beyond 49,152 feet.
+Nearby aircraft, targeting, missiles and collision
+keep their original positions. The distant image catches up between received
+positions; each catch-up lasts at most four seconds. The image can lag gameplay
+by seconds and returns immediately to its authored position on entering the
+near region. Aircraft rotation retains its original update cadence.
+Set this option to `false`, or omit it, for the original stepped presentation.
+Terrain relief also preserves the altitude of airborne point LODs; only ground
+markings and the ground-reference grid are draped onto the terrain.
+
 `antialiasing = true` smooths native scene edges before composing the original
 cockpit, HUD and effect pixels. Lines and point markers use fractional coverage
 at the output resolution, and finite spheres smaller than a pixel fade with
@@ -104,6 +121,11 @@ Profiles omitting this key retain the built-in `false` default. On the GPU this
 option selects up to four multisamples for world geometry, with analytic
 coverage for point markers and spherical particles. The cockpit/HUD overlay is
 composited afterward with nearest-neighbor sampling so its pixel art stays sharp.
+Gun tracers retain a stroke of one original 320×200 pixel as the canvas grows,
+so AA does not shrink them to a faint output-pixel hairline at high render scales.
+Their captured endpoints, palette colour and depth remain in use. This applies
+only to the `bullet` model's lines; scenery details retain their thin AA path.
+The title logo retains its existing original-pixel stroke compensation.
 
 `sphere_depth = true` gives finite round particles, including smoke from burning
 objects, depth testing against solid scenery. Previously these shared the
@@ -120,17 +142,51 @@ original hills or create terrain relief. Set it to `false` for the previous
 horizon and unmodified distance colours.
 
 `photo_skies = true` selects a day/night equirectangular panorama by the game's
-sky brightness, oriented with the camera. Import the reference panoramas once:
+sky brightness, oriented with the camera. The existing option accepts both
+pixel-art and photographic packs. Import the reference photo panoramas once:
 
 ```sh
 python3 tools/import_skies.py \
   --source /path/to/reference/assets/sky
 ```
 
-The prepared files go to ignored `bin/enhanced/sky/`; `sky_dir` selects another
-prepared directory. Missing or invalid files retain the original sky. The sky
-and atmosphere affect the main scene and target display; the attitude instrument
-keeps its original artwork. Both options work independently and default to `false` when omitted.
+That command retains the existing JPG/Poly Haven CC0 defaults and writes to
+ignored `bin/enhanced/sky/`. For another pack, place `day.png`, `night.png` and
+an accurate `SOURCE.txt` in its source directory, then import with explicit
+licence metadata, for example:
+
+```sh
+python3 tools/import_skies.py \
+  --source /path/to/sky-art \
+  --output bin/enhanced/sky-custom --source-format png --width 1024 \
+  --licence 'Your artwork licence; see SOURCE.txt'
+```
+
+PNG imports require `--licence`; the importer makes no automatic CC0 claim for
+them. It copies `SOURCE.txt` and records input/output hashes and the supplied
+licence in `SOURCE.json`. Source files stay unchanged, including when stored
+in the output pack's `source/` child directory. Conversion only decodes and
+resizes the supplied art; it does not create clouds or change its style.
+`--nearest` preserves the source pixel colours and block edges while resizing;
+omitting it retains ImageMagick's default filter used by existing photo imports.
+
+`sky_dir` selects the prepared pack. The supplied profile selects
+`bin/enhanced/sky-subtle`: the approved soft daytime panorama, paired with
+the unchanged original photo night sky. The day image is 2048×1024 with
+smooth filtering. Its source, prompt and mixed provenance are recorded
+inside the pack. Use `sky_dir = bin/enhanced/sky` for the preserved
+photographic pack.
+Set `photo_skies = false` for the original flat sky. Missing or invalid files
+also retain the original sky. Imported files use native `LHXSKY1` RGB at 2:1;
+`--width` accepts 512, 1024, 2048 or 4096, with half that height. The panorama
+wraps horizontally; matching left/right edges avoid a visible join. Above the
+horizon the renderer samples the upper half, with the horizon at the middle
+row, so keep that band clear. Existing filtering, slight dimming and optional
+haze also apply to pixel art.
+
+The sky and atmosphere affect the main scene and target display; the original
+cockpit, HUD and attitude instrument keep their artwork. Both options work
+independently and default to `false` when omitted.
 
 `replacement_models = true` uses the reference Kenney static scenery at the
 game's object positions and headings, fitted to its model bounds. This includes
@@ -166,8 +222,17 @@ This optional preparation needs ImageMagick (`magick`). It reads the source
 checkout without changing it and writes bounded native textures plus an
 attribution/hash manifest to ignored `bin/enhanced/terrain/`. Normal builds and
 play do not require ImageMagick or an additional rendering library.
-Set `terrain_textures = true` after importing. Gulf/Libya, Asia/Vietnam and
-Europe imagery switches with the selected mission theatre. Missing or invalid
+Set `terrain_textures = true` after importing. The original city model's green
+ground parcels (material 125) and the approved flat patches `square1` (10),
+`square2` (6) and `square3` (3) also sample the satellite imagery in world
+coordinates on both native backends, preserving their geometry and relief.
+Other square materials, city paving (47), lines (39), roads, trails, rivers,
+water and other scenery retain their materials. Parcels outside the imagery's
+coverage, disabled terrain textures, or missing terrain art keep the original
+flat color.
+
+Gulf/Libya, Asia/Vietnam and Europe imagery switches with the selected mission
+theatre. Missing or invalid
 files use original ground and print a diagnostic. `terrain_dir` may select a
 different prepared directory; relative paths are resolved from the working
 directory (`run.sh` starts in the project directory).

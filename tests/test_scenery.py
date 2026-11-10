@@ -121,7 +121,7 @@ class Scenery(unittest.TestCase):
             binary = root / "check"
             build = subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 "-I", str(ROOT / "runtime"), str(source), str(ROOT / "runtime/scene_props.c"),
-                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_texture.c"),
+                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_motion.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_texture.c"),
                 "-lm", "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
             run = subprocess.run([str(binary), str(valid), str(invalid), str(partial)], capture_output=True, text=True)

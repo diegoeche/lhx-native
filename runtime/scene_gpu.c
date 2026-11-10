@@ -17,7 +17,7 @@ enum { MAX_GPU_VERTICES=1048576,MAX_GPU_COMMANDS=65536,TEXTURES=128,QUERIES=8,PR
 typedef struct {
     float position[3],uv[2];uint32_t color;float bias,radius,tint,detail;
 } GpuVertex;
-typedef struct { unsigned first,count,kind;GLuint texture;int cull,stipple; } Command;
+typedef struct { unsigned first,count,kind;GLuint texture;int cull,stipple;float line_width; } Command;
 typedef struct {
     const LhxTexture *source;const uint32_t *pixels;uint64_t revision,last_used;
     GLuint name;
@@ -136,12 +136,12 @@ static int reserve(LhxGpu *g,unsigned count)
     }
     return 1;
 }
-static int append(LhxGpu *g,const GpuVertex *v,unsigned n,unsigned kind,GLuint tex,int cull,int stipple)
+static int append(LhxGpu *g,const GpuVertex *v,unsigned n,unsigned kind,GLuint tex,int cull,int stipple,float line_width)
 {
     if(!reserve(g,n))return 0;
     Command *c=g->command_count?g->commands+g->command_count-1:NULL;
-    if(!c || c->kind!=kind || c->texture!=tex || c->cull!=cull || c->stipple!=stipple){
-        c=g->commands+g->command_count++;*c=(Command){g->vertex_count,0,kind,tex,cull,stipple};
+    if(!c || c->kind!=kind || c->texture!=tex || c->cull!=cull || c->stipple!=stipple || c->line_width!=line_width){
+        c=g->commands+g->command_count++;*c=(Command){g->vertex_count,0,kind,tex,cull,stipple,line_width};
     }
     memcpy(g->vertices+g->vertex_count,v,n*sizeof(*v));g->vertex_count+=n;c->count+=n;return 1;
 }
@@ -187,8 +187,11 @@ static void flush(LhxGpu *g)
         integer(p,"stipple",c->stipple);integer(p,"textured",c->texture!=0);
         integer(p,"image",0);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,c->texture);
         if(c->cull)glEnable(GL_CULL_FACE);else glDisable(GL_CULL_FACE);
-        if(c->kind==1)glLineWidth(g->options && g->options->antialiasing?1.f:
-                                 fminf(g->max_line_width,fmaxf(1.f,0.8f*g->width/320.f)));
+        if(c->kind==1){
+            float width=g->options && g->options->antialiasing?
+                c->line_width*fminf(g->width/320.f,g->height/200.f):0.8f*g->width/320.f;
+            glLineWidth(fminf(g->max_line_width,fmaxf(1.f,width)));
+        }
         glDrawArrays(c->kind==0?GL_TRIANGLES:c->kind==1?GL_LINES:GL_POINTS,c->first,c->count);
     }
     g->vertex_count=g->command_count=0;glDisable(GL_CULL_FACE);
@@ -301,25 +304,25 @@ static int triangle(void *context,const LhxSceneVertex p[3],const LhxSceneUV *uv
     for(unsigned i=0;i<3;i++){
         v[i]=(GpuVertex){{p[i].x,p[i].y,p[i].z},{uv?uv[i].u:0,uv?uv[i].v:0},color_value,bias,0,tint,g->shadow?-g->shadow:g->detail};
     }
-    return append(g,v,3,0,name,cull,stipple);
+    return append(g,v,3,0,name,cull,stipple,0);
 }
 static int draped_triangle(void *context,const LhxSceneVertex p[3],const LhxSceneUV *uv,
                       const LhxTexture *tex,uint32_t color_value,float tint,int cull,int stipple,float bias)
 {
     LhxGpu *g=context;GpuVertex v[3]={0};GLuint name=tex?texture(g,tex):0;if(tex && !name)return 0;
     for(unsigned i=0;i<3;i++)v[i]=(GpuVertex){{p[i].x,p[i].y,p[i].z},{uv?uv[i].u:0,uv?uv[i].v:0},color_value,bias,-1,tint,0};
-    g->gpu_draped_vertices+=3;return append(g,v,3,0,name,cull,stipple);
+    g->gpu_draped_vertices+=3;return append(g,v,3,0,name,cull,stipple,0);
 }
-static int line(void *context,LhxSceneVertex a,LhxSceneVertex b,uint32_t color_value,int stipple)
+static int line(void *context,LhxSceneVertex a,LhxSceneVertex b,uint32_t color_value,int stipple,float authored_width)
 {
     GpuVertex v[2]={{{a.x,a.y,a.z},{0},color_value,0.0005f,0,1,0},
                     {{b.x,b.y,b.z},{0},color_value,0.0005f,0,1,0}};
-    return append(context,v,2,1,0,0,stipple);
+    return append(context,v,2,1,0,0,stipple,authored_width);
 }
 static int particle(void *context,LhxSceneVertex p,float radius,uint32_t color_value,int stipple)
 {
     GpuVertex v={{p.x,p.y,p.z},{0},color_value,0,radius,1,0};
-    return append(context,&v,1,2,0,0,stipple);
+    return append(context,&v,1,2,0,0,stipple,0);
 }
 static int end_view(void *context){flush(context);return 1;}
 static int material(void *context,int detail,int shadow){

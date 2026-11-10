@@ -90,6 +90,38 @@ static void capture(CPU*c,LhxSceneWorldStats*s){
  CPU before=*c;unsigned char*copy=malloc(MEM_SIZE);assert(copy);memcpy(copy,c->mem,MEM_SIZE);
  assert(lhx_scene_world_capture(c,&view,take,drop,emit,NULL,s));
  assert(!memcmp(&before,c,sizeof(*c))&&!memcmp(copy,c->mem,MEM_SIZE));free(copy);assert(!live);}
+static void motion(CPU*c){
+ /* Exercise changing positions, camera-only motion and held simulation state
+  * at near/far distances. Low-word/sign boundaries must not quantize or wrap
+  * the rendering-only inventory, and capture must never advance the object. */
+ const double depths[]={512,32767.75,32768.25,65536,500000};
+ const double origins[]={-65536.125,-32768.0625,32767.9375,65535.875};
+ for(unsigned depth=0;depth<sizeof(depths)/sizeof(*depths);depth++)
+  for(unsigned origin=0;origin<sizeof(origins)/sizeof(*origins);origin++){
+   setup(c);dw(c,0x10c,0);mem_write16(c,0x3000,0x1004,0);
+   mem_write16(c,0x4000,4,0);
+   double camera=origins[origin];
+   for(unsigned frame=0;frame<40;frame++){
+    double displacement=((int)frame-20)*17.0/256;
+    mem_write32(c,c->ds,0xf01b,(uint32_t)(int32_t)(camera*256));
+    mem_write32(c,c->ds,0xf023,(uint32_t)(int32_t)(camera*256));
+    object(c,0x1000,0x300,3,0,camera+displacement,0,camera+depths[depth]);
+    LhxSceneWorldStats stats;capture(c,&stats);
+    assert(stats.emitted==1&&last.vertex_count==4);
+    assert(fabs(points[0].x-(10+displacement))<.00001);
+    assert(points[0].z==depths[depth]);
+    assert(fabs(last.object_distance-hypot(displacement,depths[depth]))<.04);
+    /* A held source position stays held; smoothing cannot be invented here. */
+    LhxSceneVertex held=points[0];capture(c,&stats);
+    assert(!memcmp(&held,points,sizeof held));
+    /* Camera motion remains visible while the same simulation state holds. */
+    mem_write32(c,c->ds,0xf01b,(uint32_t)(int32_t)(camera*256+17));
+    capture(c,&stats);
+    assert(fabs(points[0].x-(held.x-17.0/256))<.00001);
+    assert(points[0].z==held.z);
+   }
+  }
+}
 int main(void){
  CPU c={0};c.mem=calloc(1,MEM_SIZE);assert(c.mem);LhxSceneWorldStats s;
  /* Optional display metadata uses existing camera/model layouts read-only. */
@@ -178,6 +210,7 @@ int main(void){
  assert(!lhx_scene_world_capture(&c,&view,take,drop,emit,NULL,&s));assert(!live);
  setup(&c);dw(&c,0x506,0xffff);
  assert(!lhx_scene_world_capture(&c,&view,take,drop,emit,NULL,&s));assert(!live);
+ motion(&c);
  lhx_model_reset();free(c.mem);puts("native world inventory/float geometry passed");
 }
 '''

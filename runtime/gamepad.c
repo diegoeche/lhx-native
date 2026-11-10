@@ -1,14 +1,18 @@
 #include "gamepad.h"
-#include "controls.h"
+#include "controller_input.h"
+#include "controller_model.h"
 #include "lifted.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static SDL_GameController *pad;
+static LhxControllerInput input;
+static LhxUsbRuntime usb;
+static int usb_ready;
 static LhxPadKey emit_key;
 static int focused = 1, roll_axis, pitch_axis, yaw_axis, needs_center, chase_view;
 static int view_held, controls_ready;
+static int manual_guidance, fire_repeat_suppressed;
 static LhxControls controls;
 
 /* Modifiers precede ordinary keys on press and follow them on release. */
@@ -40,17 +44,25 @@ static void release_keys(void) {
     repeat_at[i] = 0;
   }
   view_held = 0;
+  manual_guidance = fire_repeat_suppressed = 0;
 }
 
 void lhx_gamepad_configure(const LhxControls *config) {
   release_keys();
+  if (usb_ready) lhx_usb_runtime_close(&usb);
+  else { lhx_usb_runtime_init(&usb);usb_ready=1; }
+  if (config->usb.version) lhx_input_close(&input);
   roll_axis = pitch_axis = yaw_axis = 0;
   controls = *config;
   controls_ready = 1;
+  if (input.joy && (!lhx_controls_joystick_matches(&controls,input.joy) ||
+      (controls.input_mode!=LHX_INPUT_AUTO && input.raw!=(controls.input_mode==LHX_INPUT_JOYSTICK))))
+    lhx_gamepad_close();
 }
 
 void lhx_gamepad_focus(int has_focus) {
   focused = has_focus;
+  if (controls.usb.version) lhx_usb_reseed(&usb);
   if (!focused) {
     release_keys();
     roll_axis = pitch_axis = yaw_axis = 0;
@@ -61,26 +73,20 @@ void lhx_gamepad_focus(int has_focus) {
 void lhx_gamepad_close(void) {
   release_keys();
   roll_axis = pitch_axis = yaw_axis = 0;
-  if (pad)
-    SDL_GameControllerClose(pad);
-  pad = NULL;
+  lhx_input_close(&input);
+  if (usb_ready) lhx_usb_runtime_close(&usb);
 }
 
 static void open_first(void) {
-  if (pad)
-    return;
-  for (int i = 0; i < SDL_NumJoysticks(); ++i) {
-    if (!SDL_IsGameController(i))
-      continue;
-    pad = SDL_GameControllerOpen(i);
-    if (pad) {
-      SDL_Joystick *joystick = SDL_GameControllerGetJoystick(pad);
-      fprintf(stderr, "[controller] %s (%04x:%04x)\n",
-              SDL_GameControllerName(pad), SDL_JoystickGetVendor(joystick),
-              SDL_JoystickGetProduct(joystick));
-      return;
-    }
+  if (controls.usb.version) {
+    if (!usb_ready) { lhx_usb_runtime_init(&usb);usb_ready=1; }
+    lhx_usb_refresh(&usb,&controls.usb);return;
   }
+  if (input.joy) return;
+  if (lhx_input_open_selected(&input,&controls))
+    fprintf(stderr,"[controller] %s (%04x:%04x) [%s]\n",SDL_JoystickName(input.joy),
+      SDL_JoystickGetVendor(input.joy),SDL_JoystickGetProduct(input.joy),
+      input.raw?"native joystick":"mapped gamepad");
 }
 
 void lhx_gamepad_init(LhxPadKey callback) {
@@ -88,17 +94,22 @@ void lhx_gamepad_init(LhxPadKey callback) {
   emit_key = callback;
   focused = 1;
   open_first();
+  if (!controls.usb.version && !input.joy && *controls.controller_guid)
+    fprintf(stderr,"[controller] selected device unavailable; keyboard remains active\n");
 }
 
 void lhx_gamepad_event(const SDL_Event *event) {
-  if (event->type == SDL_CONTROLLERDEVICEADDED)
+  if (controls.usb.version) {
+    if (event->type==SDL_JOYDEVICEADDED || event->type==SDL_JOYDEVICEREMOVED ||
+        event->type==SDL_CONTROLLERDEVICEADDED || event->type==SDL_CONTROLLERDEVICEREMOVED) open_first();
+    return;
+  }
+  if (event->type==SDL_JOYDEVICEADDED || event->type==SDL_CONTROLLERDEVICEADDED)
     open_first();
-  else if (event->type == SDL_CONTROLLERDEVICEREMOVED && pad &&
-           event->cdevice.which == SDL_JoystickInstanceID(
-                                      SDL_GameControllerGetJoystick(pad))) {
-    fprintf(stderr, "[controller] disconnected\n");
-    lhx_gamepad_close();
-    open_first();
+  else if ((event->type==SDL_JOYDEVICEREMOVED || event->type==SDL_CONTROLLERDEVICEREMOVED) &&
+      input.joy && event->jdevice.which==SDL_JoystickInstanceID(input.joy)) {
+    fprintf(stderr,"[controller] disconnected\n");
+    lhx_gamepad_close(); open_first();
   }
 }
 
@@ -115,21 +126,30 @@ static int cyclic(int value) {
 }
 
 void lhx_gamepad_poll(uint64_t now_us) {
-  if (!pad || !focused)
+  if (!focused || (!controls.usb.version && !input.joy))
     return;
-  if (!SDL_GameControllerGetAttached(pad)) {
+  if (!controls.usb.version && !lhx_input_attached(&input)) {
     lhx_gamepad_close();
     return;
   }
   unsigned char active[LHX_ACTION_COUNT] = {0};
   unsigned char desired[KEY_COUNT] = {0};
   int analog[3] = {0};
-  for (int button = 0; button < SDL_CONTROLLER_BUTTON_MAX; ++button)
-    if (SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)button))
-      active[controls.buttons[button]] = 1;
-  for (int axis = 0; axis < SDL_CONTROLLER_AXIS_MAX; ++axis) {
-    LhxAxisBinding binding = controls.axes[axis];
-    int value = SDL_GameControllerGetAxis(pad, (SDL_GameControllerAxis)axis) * binding.direction;
+  if (controls.usb.version) {
+    lhx_usb_poll(&usb,&controls.usb);
+    memcpy(active,usb.active,sizeof active);
+    for (int a=0;a<3;++a) {
+      int v=usb.analog[a];
+      /* Hardware deadzone/calibration already applied by the per-device model. */
+      analog[a]=v?(v<0?-1:1)*(20+abs(v)*80/32767):0;
+    }
+  } else {
+  for (int button = 0; button < input.buttons; ++button)
+    if (lhx_input_button(&input,button))
+      active[lhx_input_buttons(&input,&controls)[button]] = 1;
+  for (int axis = 0; axis < input.axes; ++axis) {
+    LhxAxisBinding binding = lhx_input_axes(&input,&controls)[axis];
+    int value = lhx_input_axis(&input,axis) * binding.direction;
     if (binding.action >= LHX_ROLL && binding.action <= LHX_RUDDER) {
       int scaled = cyclic(value), slot = binding.action - LHX_ROLL;
       if (abs(scaled) > abs(analog[slot]))
@@ -145,6 +165,7 @@ void lhx_gamepad_poll(uint64_t now_us) {
       active[LHX_CHAFF] |= value > (int)controls.trigger_threshold;
     else if (binding.action == LHX_AXIS_FLARES)
       active[LHX_FLARES] |= value > (int)controls.trigger_threshold;
+  }
   }
   roll_axis = analog[0]; pitch_axis = analog[1]; yaw_axis = analog[2];
   if (roll_axis || pitch_axis || yaw_axis)
@@ -171,6 +192,12 @@ void lhx_gamepad_poll(uint64_t now_us) {
   desired[chase_view ? CHASE : COCKPIT] |= view_held;
   if (desired[INCREASE] && desired[DECREASE])
     desired[INCREASE] = desired[DECREASE] = 0;
+  /* A second fire action detonates the original manually guided TOW. Keep
+   * suppression for this entire press, even after the missile disappears. */
+  if (!desired[FIRE])
+    fire_repeat_suppressed = 0;
+  else if (manual_guidance)
+    fire_repeat_suppressed = 1;
 
   for (int i = KEY_COUNT - 1; i >= 0; --i)
     if (held[i] && !desired[i] && emit_key)
@@ -180,7 +207,8 @@ void lhx_gamepad_poll(uint64_t now_us) {
       if (emit_key)
         emit_key(scans[i], 0);
       repeat_at[i] = now_us + (uint64_t)controls.repeat_delay_ms * 1000;
-    } else if (desired[i] && (i == FIRE || i >= UP) && now_us >= repeat_at[i]) {
+    } else if (desired[i] && ((i == FIRE && !fire_repeat_suppressed) || i >= UP) &&
+               now_us >= repeat_at[i]) {
       if (emit_key) {
         /* LHX's keyboard reader can discard another make for a held key.
          * A break followed by a make becomes a distinct game action. */
@@ -196,7 +224,34 @@ void lhx_gamepad_poll(uint64_t now_us) {
   }
 }
 
+/* Parent REA exact-artifact dossier ev_bd7184208869e99e9387d4c9e13def0c207c500b252affd7a43ef8636c3ebe40.
+ * Same target, availability, bounds and reset fields as original fn_276E1.
+ * Host requests are consumed once at the existing pre-TOW observer. */
+static void apply_throttle(CPU *cpu,int percent) {
+  if (percent<0 || percent>100 || mem_read8(cpu,cpu->ds,0xd863)) return;
+  uint16_t off=mem_read16(cpu,cpu->ds,0xf626),seg=mem_read16(cpu,cpu->ds,0xf628);
+  if (!seg || off>0xffff-0x341 || ((unsigned)seg<<4)+off+0x341>MEM_SIZE) return;
+  int32_t nominal=(int16_t)mem_read16(cpu,seg,off+0x240)*256;
+  int32_t current=(int32_t)mem_read32(cpu,seg,off+0x21c);
+  int32_t low=(int32_t)mem_read32(cpu,seg,off+0x224);
+  int32_t high=(int32_t)mem_read32(cpu,seg,off+(mem_read8(cpu,seg,off+0x340)&1?0x234:0x220));
+  if (nominal<=0 || low>high) return;
+  int32_t target=(int32_t)((int64_t)nominal*percent/100);
+  if (target<low) target=low;
+  if (target>high) target=high;
+  if (target==current || (target>current && !mem_read32(cpu,seg,off+0x276))) return;
+  mem_write32(cpu,seg,off+0x242,0);
+  mem_write32(cpu,seg,off+0x21c,(uint32_t)target);
+}
 void lhx_gamepad_apply(CPU *cpu) {
+  if (controls.usb.version && focused) apply_throttle(cpu,lhx_usb_take_throttle(&usb));
+  /* Called before the original main loop saves the TOW's shared stick axes
+   * and clears them for helicopter physics. This also runs with a centered
+   * stick so a held trigger cannot become another TOW fire action. */
+  manual_guidance = mem_read8(cpu, cpu->ds, 0xd855) != 0 &&
+                    mem_read16(cpu, cpu->ds, 0x128) != 0;
+  if (manual_guidance && held[FIRE])
+    fire_repeat_suppressed = 1;
   if (!needs_center)
     return;
   /* Alt switches the original shared lateral axis to rudder control. */
@@ -209,8 +264,24 @@ void lhx_gamepad_list(void) {
   int count = SDL_NumJoysticks();
   if (!count)
     puts("No controllers detected.");
-  for (int i = 0; i < count; ++i)
-    printf("%d: %s (%04x:%04x)%s\n", i, SDL_JoystickNameForIndex(i),
-           SDL_JoystickGetDeviceVendor(i), SDL_JoystickGetDeviceProduct(i),
-           SDL_IsGameController(i) ? " [supported gamepad]" : " [unmapped device]");
+  for (int i=0;i<count;++i) {
+    LhxControllerInput device;
+    int supported=lhx_input_open(&device,i,LHX_INPUT_AUTO);
+    printf("%d: %s (%04x:%04x) [%s]",i,SDL_JoystickNameForIndex(i),
+      SDL_JoystickGetDeviceVendor(i),SDL_JoystickGetDeviceProduct(i),
+      supported?(device.raw?"supported native joystick":"supported gamepad"):
+        lhx_input_eligible(i)?"unsupported: exceeds limits or open failed":"excluded: needs at least 2 axes and 2 buttons");
+    if (supported) {
+      printf(" %d axes %d buttons %d hats",SDL_JoystickNumAxes(device.joy),
+        SDL_JoystickNumButtons(device.joy),SDL_JoystickNumHats(device.joy));
+      lhx_input_close(&device);
+    }
+    puts("");
+  }
+  LhxUsbCandidate list[LHX_USB_CANDIDATES];
+  int n=lhx_usb_candidates(list,LHX_USB_CANDIDATES);
+  if (n<0) puts("USB list exceeds 64 candidates; no silent truncation. Disconnect unused devices.");
+  for (int i=0;i<n;++i) printf("USB candidate: %s GUID=%s serial=%s %d axes %d buttons %d hats [%s; explicit enable required]\n",
+    list[i].name,list[i].identity.guid,*list[i].identity.serial?list[i].identity.serial:"none",list[i].axes,list[i].buttons,list[i].hats,
+    *list[i].error?list[i].error:"capable");
 }

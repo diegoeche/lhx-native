@@ -177,7 +177,7 @@ class SceneGpu(unittest.TestCase):
                 "-Werror", "-DLHX_HAVE_OPENGL=1", "-I", str(work),
                 "-I", str(ROOT / "runtime"), "-I", str(ROOT / "third_party/pcrecomp/runtime"),
                 str(source), str(ROOT / "runtime/scene_gpu.c"),
-                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"), str(ROOT / "runtime/scene_texture.c"),
+                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_motion.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"), str(ROOT / "runtime/scene_texture.c"),
                 str(ROOT / "runtime/scene_composite.c"), *shlex.split(packages.stdout),
                 "-lm", "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(compile_result.returncode, 0, compile_result.stderr)

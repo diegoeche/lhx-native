@@ -23,6 +23,7 @@ void mouse_int33(CPU *);
 void lhx_int86(CPU *);
 void lhx_project(CPU *);
 void lhx_frame_pace(CPU *);
+/* Main-loop instruction observer, before the original TOW save/clear. */
 void lhx_gamepad_apply(CPU *);
 extern int g_lhx_scene_enabled;
 void lhx_scene_event(CPU *, unsigned);

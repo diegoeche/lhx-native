@@ -260,7 +260,7 @@ class SceneRenderer(unittest.TestCase):
         cls.binary = directory / "check"
         subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-I", str(ROOT / "runtime"), str(source),
-                        str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"),
+                        str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_motion.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"),
                         str(ROOT / "runtime/scene_texture.c"), "-lm", "-o", str(cls.binary)],
                        check=True, capture_output=True, text=True)
 

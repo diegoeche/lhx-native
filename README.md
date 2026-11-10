@@ -27,13 +27,15 @@ tools. Please check out and credit their work.
   Libya, Vietnam and Europe; cloud/night skies and horizon haze.
 - Replacement buildings and trees, sun/contact shadows, runway markings,
   service paint, aircraft panel detail, vehicle camouflage and spinning rotors.
-- Original menus, mission callbacks, flight dynamics and PC speaker sound.
-- Keyboard and SDL gamepad input, including a tested Logitech F310 mapping,
-  usable collective controls, held fire, chaff and flares.
+- Original menus, mission callbacks and flight dynamics; original PC speaker
+  sound or optional [procedural stereo audio](docs/AUDIO.md).
+- Keyboard, SDL gamepads and native joysticks, including a tested Logitech F310 mapping,
+  usable collective controls, held fire, [manual TOW guidance](docs/WEAPONS.md),
+  chaff and flares.
 - Configurable graphics and controls through the existing [controls.ini](controls.ini).
 
 This is an experimental reimplementation, not a finished remaster. Automated
-checks cover boot, menus, AH-64 takeoff, firing, camera changes and sustained
+checks cover boot, menus, AH-64 takeoff, firing, TOW guidance, camera changes and sustained
 climbs. Mission completion and the other aircraft need more playtesting.
 
 ## Bring your own game
@@ -76,6 +78,7 @@ There is no DOSBox or CPU instruction interpreter in the running game.
 ./run.sh --backend cpu --render-scale 3
 ./run.sh --renderer original   # original 320×200 rendering
 ./run.sh --show-fps            # F12 toggles the counter during play
+./run.sh --configure-controls  # optional controller setup before the game
 ```
 
 The supplied INI enables the graphics options and a 2560×1600 GPU canvas.
@@ -84,6 +87,8 @@ prints the actual device; unavailable GPU support falls back to CPU rendering.
 Use a lower render scale for the CPU fallback.
 
 Saves go to ignored `saves/`; `--save-dir PATH` selects another directory.
+The supplied INI enables improved sounds under `[audio]`; set
+`improved_sounds = false` for the classic sound. [Audio options](docs/AUDIO.md).
 [Build details, validation and the supported-code approach](docs/DEVELOPMENT.md)
 are documented separately.
 
@@ -104,6 +109,11 @@ python3 tools/import_skies.py   --source /path/to/reference/assets/sky
 The importers read the reference checkout without modifying it and write local
 resources to ignored `bin/enhanced/`. They retain source hashes and attribution.
 The game has no network dependency at runtime.
+
+The supplied profile selects the approved subtle daytime sky at
+`bin/enhanced/sky-subtle/`, paired with the original photo night sky.
+Use `sky_dir = bin/enhanced/sky` for the original photo pack. Custom sky
+preparation and the original-sky fallback are covered in the rendering guide below.
 
 [Rendering options and asset preparation](docs/RENDERING.md) explain each INI
 setting, fallback behavior and resource requirements. Terrain relief changes
@@ -127,11 +137,19 @@ These are gameplay captures, resized for documentation.
 | --- | --- |
 | Enter / arrows | Menus |
 | Top-row **5** | Maximum collective for takeoff |
-| Top-row **3** | Hover collective preset |
+| Top-row **3** | Original aircraft lift preset |
 | Keypad **5** or **/** | Centre the flight stick |
 | **G** | Landing gear on LHX and Osprey |
 | **F1** / **F5** | Cockpit / chase view |
 | **F12** | FPS counter |
+
+Optional multi-USB setup supports independent stick, lever, pedals and button-box
+bindings. Run `./run.sh --configure-controls`, choose **Multi-USB bindings**, enable
+your devices, then select an action and **Add binding**. Calibration and USB
+profiles save in the same INI; Session and Cancel leave the file untouched.
+For the exact Linux PC-mode HOTAS One with TFRP pedals, press **H / HOTAS One +
+pedals** on the initial setup screen for stick, direct throttle and pedal yaw.
+The preset fills unused bindings and preserves custom controls and calibration.
 
 Gamepads connect automatically. The supplied F310 layout uses the left stick
 for cyclic, right stick for rudder/collective, RT to fire, X for chaff and Y for

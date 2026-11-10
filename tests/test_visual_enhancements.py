@@ -180,7 +180,7 @@ class VisualEnhancements(unittest.TestCase):
             built = subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 "-I", str(ROOT / "runtime"), str(work / "check.c"),
                 *[str(ROOT / "runtime" / f"{name}.c") for name in
-                  ("scene_renderer", "scene_texture", "scene_assets", "scene_props", "scene_relief")],
+                  ("scene_renderer", "scene_motion", "scene_texture", "scene_assets", "scene_props", "scene_relief")],
                 "-lm", "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
             result = subprocess.run([str(binary), str(work / "library.lib"),

@@ -97,7 +97,7 @@ class Antialiasing(unittest.TestCase):
             binary = work / "check"
             built = subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 "-I", str(ROOT / "runtime"), str(source),
-                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"), str(ROOT / "runtime/scene_texture.c"),
+                str(ROOT / "runtime/scene_renderer.c"), str(ROOT / "runtime/scene_motion.c"), str(ROOT / "runtime/scene_relief.c"), str(ROOT / "runtime/scene_props.c"), str(ROOT / "runtime/scene_texture.c"),
                 "-lm", "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15)

@@ -58,6 +58,23 @@ static void placement(LhxSceneMesh *m,const char *name,double x,double y,double 
  for(unsigned i=0;i<3;i++){m->model_to_view[i][i]=1;m->model_bounds[i*2]=-80;m->model_bounds[i*2+1]=80;}
  m->model_to_view[0][3]=x-view.camera[0];m->model_to_view[1][3]=y-view.camera[1];m->model_to_view[2][3]=z-view.camera[2];
 }
+static void ground_dots(void){
+ setup();draw();memcpy(baseline,pixels,sizeof pixels);
+ /* Place the tiny point on a pixel centre for the non-antialiased GPU path. */
+ uint16_t index=0;LhxSceneVertex vertex={.78125f,-.8333333f,200};
+ LhxScenePrimitive p={.kind=3,.count=1,.indices=&index,.radius=4,.color=2};
+ LhxSceneMesh m={.vertices=&vertex,.vertex_count=1,.primitives=&p,.primitive_count=1,.layer=0};
+ strcpy(m.model_name,"spheres");view.meshes=&m;view.mesh_count=1;
+ draw();assert(difference(baseline,pixels)>0);memcpy(saved,pixels,sizeof pixels);
+ options.hide_ground_dots=1;draw();assert(!memcmp(baseline,pixels,sizeof pixels));
+ /* A sphere belonging to smoke must remain, as must stars and point LODs. */
+ strcpy(m.model_name,"smoke");draw();assert(!memcmp(saved,pixels,sizeof pixels));
+ p.kind=2;p.radius=0;strcpy(m.model_name,"stars");draw();assert(difference(baseline,pixels)>0);
+ strcpy(m.model_name,"house1");draw();assert(difference(baseline,pixels)>0);
+ p.kind=3;p.radius=4;strcpy(m.model_name,"spheres");
+ m.layer=2;draw();assert(!memcmp(saved,pixels,sizeof pixels));
+ m.layer=0;options.hide_ground_dots=0;draw();assert(!memcmp(saved,pixels,sizeof pixels));
+}
 static void paint(void){
  setup();uint16_t ids[]={0,1,2,3};LhxSceneVertex vertices[]={{-80,80,200},{80,80,200},{80,-80,200},{-80,-80,200}};
  LhxScenePrimitive p={.kind=0,.count=4,.indices=ids,.color=2};
@@ -74,6 +91,116 @@ static void paint(void){
  memcpy(saved,pixels,sizeof pixels);strcpy(m.model_name,"m1");draw();assert(difference(saved,pixels)>100);
  options=(LhxSceneRenderOptions){0};for(unsigned i=0;i<4;i++)vertices[i].x-=25;draw();
  assert(!memcmp(baseline,pixels,sizeof pixels));
+}
+static uint32_t palette_color(unsigned color){
+ return 0xff000000u|(palette[color*3]*255/63<<16)|
+  (palette[color*3+1]*255/63<<8)|(palette[color*3+2]*255/63);
+}
+static void original_parcel(const LhxTerrain *terrain,uint32_t color){
+ options.terrain=NULL;draw();memcpy(saved,pixels,sizeof pixels);
+ options.terrain=terrain;draw();unsigned retained=0;
+ for(unsigned i=0;i<64000;i++)if(saved[i]==color){assert(pixels[i]==saved[i]);retained++;}
+ assert(retained>50);
+}
+static void parcel_ground(const char *name,unsigned material){
+ setup();view.camera[1]=120;view.horizon.colors[0]=1;
+ palette[125*3]=1;palette[125*3+1]=28;palette[125*3+2]=0;
+ palette[10*3+1]=63;
+ palette[6*3]=40;palette[6*3+1]=24;
+ palette[3*3+1]=palette[3*3+2]=40;
+ palette[9*3]=palette[9*3+2]=63;
+ palette[47*3]=palette[47*3+1]=palette[47*3+2]=8;
+ palette[39*3]=palette[39*3+1]=palette[39*3+2]=27;
+ uint32_t original=palette_color(material);
+ uint32_t near_pixels[]={0xffa06040,0xff806040,0xffa08060,0xff808060};
+ uint32_t far_pixels[]={0xff405080,0xff607080,0xff405060,0xff607060};
+ LhxTerrain terrain={.near={.texture={.count=1,.levels={{2,2,near_pixels}}},.bounds={-200,0,0,600}},
+  .far={.texture={.count=1,.levels={{2,2,far_pixels}}},.bounds={-1000,1000,0,1600}}};
+ /* Keep the line in the gap between faces: coplanar line/triangle sample
+  * coverage can leave no exact line-color pixels after multisample resolve. */
+ uint16_t ids[]={0,1,2,3},paved_ids[]={4,5,6,7},line_ids[]={3,4};
+ LhxScenePrimitive primitives[]={{.count=4,.indices=ids,.color=material},
+  {.count=4,.indices=paved_ids,.color=47},{.kind=1,.count=2,.indices=line_ids,.color=39}};
+ LhxSceneVertex vertices[2][8];
+ LhxSceneMesh meshes[2];memset(meshes,0,sizeof meshes);
+ view.meshes=meshes;view.mesh_count=2;
+ for(unsigned pose=0;pose<3;pose++){
+  double bank=pose*.13,pitch=pose*.11;
+  double matrix[3][3]={{cos(bank),sin(bank)*cos(pitch),-sin(bank)*sin(pitch)},
+   {-sin(bank),cos(bank)*cos(pitch),-cos(bank)*sin(pitch)},{0,sin(pitch),cos(pitch)}};
+  memcpy(view.world_to_view,matrix,sizeof matrix);
+  for(unsigned m=0;m<2;m++){
+   meshes[m]=(LhxSceneMesh){.vertices=vertices[m],.vertex_count=8,.primitives=primitives,.primitive_count=3,.layer=1};
+   placement(meshes+m,name,m?120:-100,0,300);
+   double angle=m?.5:0;
+   for(unsigned i=0;i<8;i++){
+    double x=(i%4==1 || i%4==2?35:-35),z=(i>=4?110:0)+(i%4>=2?35:-35);
+    double world[]={meshes[m].world_origin[0]+x*cos(angle)+z*sin(angle),-120,
+     300-x*sin(angle)+z*cos(angle)};
+    double q[3]={0};for(unsigned j=0;j<3;j++)for(unsigned k=0;k<3;k++)q[j]+=matrix[j][k]*world[k];
+    vertices[m][i]=(LhxSceneVertex){q[0],q[1],q[2]};
+   }
+  }
+  options.terrain=NULL;draw();memcpy(baseline,pixels,sizeof pixels);
+  options.terrain=&terrain;draw();memcpy(saved,pixels,sizeof pixels);
+  unsigned textured=0,paving=0,line=0;
+  for(unsigned i=0;i<64000;i++){
+   if(baseline[i]==original){assert(pixels[i]!=baseline[i]);textured++;}
+   if(baseline[i]==0xff202020){assert(pixels[i]==baseline[i]);paving++;}
+   if(baseline[i]==0xff6d6d6d){assert(pixels[i]==baseline[i]);line++;}
+  }
+  assert(textured>200 && paving>100 && line>0);
+  /* Compare the parcel interior to a separately drawn satellite ground.
+   * The imagery stays in world coordinates through bank, pitch and rotation. */
+  view.mesh_count=0;draw();unsigned same=0;
+  for(unsigned i=0;i<64000;i++)if(baseline[i]==original){
+   int close=1;for(unsigned shift=0;shift<24;shift+=8)
+    if(abs((int)((saved[i]>>shift)&255)-(int)((pixels[i]>>shift)&255))>1)close=0;
+   same+=close;
+  }
+  assert(same>textured*95/100);view.mesh_count=2;
+  /* Same material on other scenery and solid geometry is retained. */
+  strcpy(meshes[0].model_name,"farm");meshes[1].layer=2;draw();
+  for(unsigned i=0;i<64000;i++)if(baseline[i]==original)assert(pixels[i]==baseline[i]);
+  strcpy(meshes[0].model_name,name);meshes[1].layer=1;
+  options.terrain=NULL;draw();assert(!memcmp(baseline,pixels,sizeof pixels));
+  LhxTerrain empty={0};options.terrain=&empty;draw();assert(!memcmp(baseline,pixels,sizeof pixels));
+  /* No available imagery covering either parcel: preserve the legacy faces. */
+  terrain.near.bounds[2]=terrain.far.bounds[2]=1000;
+  terrain.near.bounds[3]=terrain.far.bounds[3]=1600;
+  options.terrain=&terrain;draw();
+  for(unsigned i=0;i<64000;i++)if(baseline[i]==original)assert(pixels[i]==baseline[i]);
+  /* Partial coverage must also retain the entire original face. */
+  terrain.near.bounds[2]=terrain.far.bounds[2]=300;
+  original_parcel(&terrain,original);
+  terrain.near.bounds[2]=terrain.far.bounds[2]=0;terrain.near.bounds[3]=600;
+  const char *others[]={"farm","road","trail","river","water","coast",
+   "city","square1","square2","square3","square10"};
+  for(unsigned j=0;j<sizeof others/sizeof *others;j++)if(strcmp(name,others[j])){
+   for(unsigned m=0;m<2;m++)strcpy(meshes[m].model_name,others[j]);
+   original_parcel(&terrain,original);
+  }
+  for(unsigned m=0;m<2;m++)strcpy(meshes[m].model_name,name);
+  /* Matching a model alone must not replace its other materials. */
+  unsigned colors[]={125,10,6,3,9,47,39};
+  for(unsigned j=0;j<sizeof colors/sizeof *colors;j++)if(colors[j]!=material){
+   primitives[0].color=colors[j];original_parcel(&terrain,palette_color(colors[j]));
+  }
+  primitives[0].color=material;
+  for(unsigned layer=0;layer<=2;layer+=2){
+   for(unsigned m=0;m<2;m++)meshes[m].layer=layer;
+   original_parcel(&terrain,original);
+  }
+  for(unsigned m=0;m<2;m++){meshes[m].layer=1;meshes[m].has_placement=0;}
+  original_parcel(&terrain,original);
+  for(unsigned m=0;m<2;m++)meshes[m].has_placement=1;
+  view.has_camera=0;original_parcel(&terrain,original);view.has_camera=1;
+  primitives[0].stipple=1;original_parcel(&terrain,original);primitives[0].stipple=0;
+  LhxTexture existing={.count=1,.levels={{1,1,&original}}};LhxSceneUV uv[8]={0};
+  for(unsigned m=0;m<2;m++){meshes[m].texture=&existing;meshes[m].uvs=uv;}
+  original_parcel(&terrain,original);
+  for(unsigned m=0;m<2;m++){meshes[m].texture=NULL;meshes[m].uvs=NULL;}
+ }
 }
 static void shadows(void){
  setup();view.camera[1]=100;view.horizon.colors[0]=1;
@@ -144,6 +271,37 @@ static void terrain_depth(void){
  options.terrain_relief=1;draw();assert(pixels[100*320+160]==0xffff0000);
  options.terrain_relief=0;draw();assert(pixels[100*320+160]==0xff00ff00);
 }
+static void airborne_point(void){
+ setup();
+ float heights[4]={0};LhxTerrainVertex ground[4]={0};
+ LhxTerrain t={.near={.bounds={-4000,4000,-4000,4000},.source_n=4,.step=2,.n=2,
+  .heights=heights,.vertices=ground}};t.far=t.near;
+ /* A distant point LOD must retain the altitude of its detailed mesh. Its
+  * original background layer does not make an aircraft a ground marking. */
+ uint16_t id=0;LhxSceneVertex v={3.90625f,104.1666667f,1000};
+ LhxScenePrimitive p={.kind=2,.count=1,.indices=&id,.color=2};
+ LhxSceneMesh m={.vertices=&v,.vertex_count=1,.primitives=&p,.primitive_count=1,.layer=0};
+ placement(&m,"apache",v.x,v.y,v.z);view.meshes=&m;view.mesh_count=1;
+ options.terrain=&t;
+ draw();assert(pixels[87*320+160]==0xff00ff00);memcpy(baseline,pixels,sizeof pixels);
+ options.terrain_relief=1;draw();assert(pixels[87*320+160]==0xff00ff00);
+ m.layer=2;draw();assert(pixels[87*320+160]==0xff00ff00);
+ m.layer=0;strcpy(m.model_name,"missile");draw();assert(pixels[87*320+160]==0xff00ff00);
+ options.terrain_relief=0;strcpy(m.model_name,"apache");draw();
+ assert(!memcmp(baseline,pixels,sizeof pixels));
+}
+static void aircraft_motion_raster(void){
+ setup();uint16_t id=0;LhxSceneVertex v={256,273.0666667f,65536};
+ LhxScenePrimitive p={.kind=2,.count=1,.indices=&id,.color=2};
+ LhxSceneMesh m={.vertices=&v,.vertex_count=1,.primitives=&p,.primitive_count=1,.layer=2,.object_id=0x4321};
+ placement(&m,"hip",v.x,v.y,v.z);view.meshes=&m;view.mesh_count=1;
+ options.smooth_distant_aircraft=1;draw();assert(pixels[99*320+160]==0xff00ff00);
+ options.time_seconds=2;v.x+=4096;m.world_origin[0]+=4096;m.model_to_view[0][3]+=4096;
+ draw();assert(pixels[99*320+160]==0xff00ff00);
+ options.time_seconds=3;draw();assert(pixels[99*320+164]==0xff00ff00);
+ options.smooth_distant_aircraft=0;draw();assert(pixels[99*320+168]==0xff00ff00);
+ assert(v.x==4352 && m.world_origin[0]==4352);
+}
 static void terrain_drape(const char *path){
  setup();view.camera[1]=50;view.camera[2]=-100;
  uint32_t blue=0xff0000ff;
@@ -164,6 +322,17 @@ static void terrain_drape(const char *path){
   }
  }
  assert(compared>30);memcpy(saved,pixels,sizeof pixels);options.terrain_relief=0;draw();assert(difference(saved,pixels)>50);
+ /* Approved parcels keep the same relief geometry as an explicit textured
+  * ground face, including slopes and the raised camera base. */
+ const char *names[]={"city","square1","square2","square3"};
+ unsigned materials[]={125,10,6,3};
+ LhxSceneUV uv[]={{.125,.625},{.625,.625},{.625,.125},{.125,.125}};
+ for(unsigned j=0;j<4;j++){
+  p.color=materials[j];strcpy(m.model_name,names[j]);m.texture=NULL;m.uvs=NULL;
+  options.terrain_relief=1;draw();memcpy(baseline,pixels,sizeof pixels);
+  m.texture=&t.near.texture;m.uvs=uv;draw();assert(!memcmp(baseline,pixels,sizeof pixels));
+  options.terrain_relief=0;draw();assert(difference(baseline,pixels)>50);
+ }
  lhx_relief_free(&t.near);lhx_relief_free(&t.far);
 }
 static unsigned triangles;static double first_y;
@@ -171,9 +340,37 @@ static int emit_view(void *c,const LhxSceneView *v,const uint32_t col[256],float
 static int emit_layer(void *c,int layer){(void)c;(void)layer;return 1;}
 static int emit_triangle(void *c,const LhxSceneVertex p[3],const LhxSceneUV *uv,const LhxTexture *t,uint32_t color,float tint,int one,int stipple,float bias){
  (void)c;(void)uv;(void)t;(void)color;(void)tint;(void)one;(void)stipple;(void)bias;if(!triangles)first_y=p[0].y;triangles++;return 1;}
-static int emit_line(void *c,LhxSceneVertex a,LhxSceneVertex b,uint32_t col,int stipple){(void)c;(void)a;(void)b;(void)col;(void)stipple;return 1;}
-static int emit_particle(void *c,LhxSceneVertex a,float r,uint32_t col,int stipple){(void)c;(void)a;(void)r;(void)col;(void)stipple;return 1;}
+static int emit_line(void *c,LhxSceneVertex a,LhxSceneVertex b,uint32_t col,int stipple,float width){(void)c;(void)a;(void)b;(void)col;(void)stipple;(void)width;return 1;}
+static LhxSceneVertex last_particle;
+static int emit_particle(void *c,LhxSceneVertex a,float r,uint32_t col,int stipple){(void)c;(void)r;(void)col;(void)stipple;last_particle=a;return 1;}
 static int emit_end(void *c){(void)c;return 1;}
+static void aircraft_motion(void){
+ setup();uint16_t id=0;LhxSceneVertex v={0,1000,65536};
+ LhxScenePrimitive p={.kind=2,.count=1,.indices=&id,.color=2};
+ LhxSceneMesh m={.vertices=&v,.vertex_count=1,.primitives=&p,.primitive_count=1,.layer=2,.object_id=0x1234};
+ placement(&m,"hip",0,1000,65536);view.meshes=&m;view.mesh_count=1;
+ const LhxSceneGeometrySink sink={emit_view,emit_layer,emit_triangle,emit_line,emit_particle,emit_end,NULL,NULL,NULL};
+ options.smooth_distant_aircraft=1;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.x==0);
+ options.time_seconds=2;v.x=1000;m.world_origin[0]=m.model_to_view[0][3]=1000;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.x==0);
+ options.time_seconds=3;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.x==500);
+ assert(v.x==1000 && m.world_origin[0]==1000 && m.model_to_view[0][3]==1000);
+ /* Apply the WORLD offset through the current camera, never screen axes. */
+ view.world_to_view[0][0]=view.world_to_view[2][2]=0;
+ view.world_to_view[0][2]=1;view.world_to_view[2][0]=-1;
+ v.x=65536;v.z=-1000;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);
+ assert(last_particle.x==65536 && last_particle.z==-500);
+ options.smooth_distant_aircraft=0;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.z==-1000);
+ options.smooth_distant_aircraft=1;options.time_seconds=3.5;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.z==-1000);
+ /* Re-entering combat range immediately uses the authored geometry. */
+ m.world_origin[2]=1000;v.z=-2000;options.time_seconds=4;
+ assert(lhx_scene_emit_geometry(&frame,palette,&options,&sink,NULL)==1);assert(last_particle.z==-2000);
+}
 static void relief(const char *path,const char *bad){
  setup();LhxTerrain t={.near={.bounds={-20,20,0,40}},.far={.bounds={-20,20,0,40}}};
  assert(lhx_relief_load(&t.near,path));assert(lhx_relief_load(&t.far,path));assert(lhx_relief_ready(&t));
@@ -201,9 +398,17 @@ int main(int argc,char **argv){
  SDL_Window *window=SDL_CreateWindow("Enhancement test",0,0,320,200,SDL_WINDOW_OPENGL|SDL_WINDOW_HIDDEN);
  if(!window){SDL_Quit();return 77;}gpu=lhx_gpu_create(window,320,200,0,0);assert(gpu);
 #endif
- if(!strcmp(argv[1],"paint"))paint();else if(!strcmp(argv[1],"shadow"))shadows();
+ if(!strcmp(argv[1],"ground-dots"))ground_dots();
+ else if(!strcmp(argv[1],"city-ground"))parcel_ground("city",125);
+ else if(!strcmp(argv[1],"square1-ground"))parcel_ground("square1",10);
+ else if(!strcmp(argv[1],"square2-ground"))parcel_ground("square2",6);
+ else if(!strcmp(argv[1],"square3-ground"))parcel_ground("square3",3);
+ else if(!strcmp(argv[1],"paint"))paint();else if(!strcmp(argv[1],"shadow"))shadows();
  else if(!strcmp(argv[1],"rotor"))rotors();else if(!strcmp(argv[1],"runway"))runway();
  else if(!strcmp(argv[1],"terrain-depth"))terrain_depth();
+ else if(!strcmp(argv[1],"airborne-point"))airborne_point();
+ else if(!strcmp(argv[1],"aircraft-motion"))aircraft_motion();
+ else if(!strcmp(argv[1],"aircraft-motion-raster"))aircraft_motion_raster();
  else if(!strcmp(argv[1],"target-sky"))target_sky();
  else if(!strcmp(argv[1],"terrain-drape")){assert(argc==4);terrain_drape(argv[2]);}
  else if(!strcmp(argv[1],"relief")){assert(argc==4);relief(argv[2],argv[3]);}else assert(0);
@@ -230,7 +435,7 @@ class EnhancedScene(unittest.TestCase):
             if backend=='gpu' and not cls.gpu_available:continue
             binary=cls.work/backend
             command=['cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-I',str(ROOT/'runtime'),'-I',str(cls.work),'-I',str(ROOT/'third_party/pcrecomp/runtime'),str(source)]
-            command += [str(ROOT/'runtime'/f'{name}.c') for name in ('scene_renderer','scene_props','scene_texture','scene_relief')]
+            command += [str(ROOT/'runtime'/f'{name}.c') for name in ('scene_renderer','scene_motion','scene_props','scene_texture','scene_relief')]
             if backend=='gpu':command += ['-DGPU=1','-DLHX_HAVE_OPENGL=1',str(ROOT/'runtime/scene_gpu.c'),*shlex.split(packages.stdout)]
             command += ['-lm','-o',str(binary)]
             result=subprocess.run(command,capture_output=True,text=True)
@@ -249,6 +454,16 @@ class EnhancedScene(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_cpu_paint_and_model_space_detail(self): self.check('paint','cpu')
+    def test_cpu_city_ground_imagery_and_material_fallbacks(self): self.check('city-ground','cpu')
+    def test_gpu_city_ground_imagery_and_material_fallbacks(self): self.check('city-ground','gpu')
+    def test_cpu_square_ground_imagery_and_material_fallbacks(self):
+        for name in ('square1','square2','square3'):
+            with self.subTest(model=name): self.check(name+'-ground','cpu')
+    def test_gpu_square_ground_imagery_and_material_fallbacks(self):
+        for name in ('square1','square2','square3'):
+            with self.subTest(model=name): self.check(name+'-ground','gpu')
+    def test_cpu_ground_dots_only_and_disabled_baseline(self): self.check('ground-dots','cpu')
+    def test_gpu_ground_dots_only_and_disabled_baseline(self): self.check('ground-dots','gpu')
     def test_gpu_paint_and_model_space_detail(self): self.check('paint','gpu')
     def test_cpu_shadow_overlap_and_aircraft_exclusion(self): self.check('shadow','cpu')
     def test_gpu_shadow_overlap_and_aircraft_exclusion(self): self.check('shadow','gpu')
@@ -256,6 +471,11 @@ class EnhancedScene(unittest.TestCase):
     def test_gpu_rotors_and_disabled_baseline(self): self.check('rotor','gpu')
     def test_cpu_ground_markings_follow_relief(self): self.check('terrain-drape','cpu')
     def test_gpu_ground_markings_follow_relief(self): self.check('terrain-drape','gpu')
+    def test_cpu_airborne_point_lod_retains_altitude(self): self.check('airborne-point','cpu')
+    def test_gpu_airborne_point_lod_retains_altitude(self): self.check('airborne-point','gpu')
+    def test_aircraft_motion_geometry_and_disabled_baseline(self): self.check('aircraft-motion','cpu')
+    def test_cpu_aircraft_motion_pixels_and_disabled_baseline(self): self.check('aircraft-motion-raster','cpu')
+    def test_gpu_aircraft_motion_pixels_and_disabled_baseline(self): self.check('aircraft-motion-raster','gpu')
     def test_cpu_target_sky_and_attitude_preservation(self): self.check('target-sky','cpu')
     def test_gpu_target_sky_and_attitude_preservation(self): self.check('target-sky','gpu')
     def test_cpu_terrain_occludes_distant_scenery(self): self.check('terrain-depth','cpu')

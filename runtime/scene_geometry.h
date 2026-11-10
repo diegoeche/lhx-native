@@ -10,7 +10,9 @@ typedef struct {
     int (*layer)(void *,int);
     int (*triangle)(void *,const LhxSceneVertex[3],const LhxSceneUV *,
                     const LhxTexture *,uint32_t,float,int,int,float);
-    int (*line)(void *,LhxSceneVertex,LhxSceneVertex,uint32_t,int);
+    /* Authored width in 320x200 pixels; zero keeps the thin world-line path.
+     * Consumers apply authored widths only with antialiasing enabled. */
+    int (*line)(void *,LhxSceneVertex,LhxSceneVertex,uint32_t,int,float);
     int (*particle)(void *,LhxSceneVertex,float,uint32_t,int);
     int (*end_view)(void *);
     int (*material)(void *,int detail,int shadow); /* Optional procedural/ground-shadow state. */

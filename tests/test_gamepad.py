@@ -13,6 +13,20 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which("cc") and shutil.which("pkg-config"),
                      "C compiler and SDL2 pkg-config required")
 class Gamepad(unittest.TestCase):
+    def test_tow_trigger_latch_and_original_axis_handoff(self):
+        version = subprocess.run(["pkg-config", "--atleast-version=2.24.0", "sdl2"],
+                                 capture_output=True)
+        if version.returncode:
+            self.skipTest("SDL2 2.24 virtual joystick support required")
+        from tow_gamepad_probe import run_probe
+        observed = run_probe()
+        self.assertEqual(observed, {
+            "ordinary_repeat": 1, "tow_repeats": 0, "after_guidance_repeats": 0,
+            "explicit_repress": 1,
+            "helicopter_axis_during_tow": 0, "missile_axis": 100,
+            "ordinary_axis": 100,
+        })
+
     def test_f310_mapping_axes_repeats_and_lifecycle(self):
         version = subprocess.run(["pkg-config", "--atleast-version=2.24.0", "sdl2"],
                                  capture_output=True)
@@ -117,7 +131,7 @@ int main(int argc,char **argv){
     cpu.mem=calloc(1,MEM_SIZE);assert(cpu.mem);cpu.ds=0x2000;
     int index=attach();lhx_gamepad_init(key);step(0);
     /* Raw DirectInput face-button ordering differs from SDL's A/B/X/Y enum. */
-    tap(1,0x1c);tap(2,0x01);tap(0,0x2e);tap(3,0x21);
+    tap(1,0x1c);tap(8,0x01);tap(0,0x2e);tap(3,0x21);
     tap(6,0x04);tap(10,0x22);tap(11,0x1b);
     /* Fire and +/- collective repeat while held; release stops repeats. */
     button(7,1);repeat(0x39,350000,100000);button(7,0);
@@ -133,7 +147,8 @@ int main(int argc,char **argv){
     assert(sequence[start]==0x1d && sequence[start+1]==0x19);
     button(9,0);assert(!down[0x1d] && !down[0x19]);
     assert(sequence[start+2]==(0x10000|0x19) && sequence[start+3]==(0x10000|0x1d));
-    tap(8,0x3f);tap(8,0x3b);
+    unsigned menus=makes[0x01];
+    tap(2,0x3f);tap(2,0x3b);assert(makes[0x01]==menus);
     assert(load_config(argv[2]));
     /* Multiple countermeasure bindings still deploy just once while held. */
     unsigned cartridges=makes[0x2e],released=breaks[0x2e];
@@ -242,7 +257,7 @@ throttle_repeat_ms = 90
             defaults.write_text("# Default layout for subsequent checks.\n")
             compiled = subprocess.run([
                 "cc", "-std=c11", "-O2", "-I", str(tmp), "-I", str(ROOT / "runtime"),
-                str(source), str(ROOT / "runtime/gamepad.c"), str(ROOT / "runtime/controls.c"),
+                str(source), str(ROOT / "runtime/gamepad.c"), str(ROOT / "runtime/controls.c"), str(ROOT / "runtime/controller_input.c"), str(ROOT / "runtime/controller_profile.c"), str(ROOT / "runtime/controller_model.c"),
                 *shlex.split(flags.stdout), "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             env = os.environ | {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}

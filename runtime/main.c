@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "audio_driver.h"
+#include "audio_synth.h"
 #include "lifted.h"
 #include "mission_module.h"
 #include "cockpit_module.h"
@@ -7,6 +8,7 @@
 #include "frame_clock.h"
 #include "fps.h"
 #include "gamepad.h"
+#include "controller_setup.h"
 #include "scene_capture.h"
 #include "scene_composite.h"
 #include "scene_renderer.h"
@@ -42,6 +44,8 @@ static SDL_AudioDeviceID audio_device;
 static atomic_uint audio_divisor = 65536;
 static atomic_int audio_gate;
 static int audio_rate = 48000;
+static int improved_sounds, audio_channels = 1;
+static LhxSound enhanced_audio;
 static const char *data_dir = "bin/dos", *save_dir = "saves", *shot_path;
 static const char *memory_path;
 static double limit_seconds;
@@ -110,13 +114,19 @@ static void speaker_audio(void *unused, Uint8 *stream, int len) {
     if(gap>atomic_load_explicit(&audio_max_callback_gap,memory_order_relaxed))
       atomic_store_explicit(&audio_max_callback_gap,gap,memory_order_relaxed);
   }
+  if (improved_sounds && atomic_load_explicit(&enhanced_audio.received, memory_order_acquire)) {
+    lhx_sound_render(&enhanced_audio, (int16_t *)stream,
+                     len / (sizeof(int16_t) * audio_channels), audio_channels);
+    return;
+  }
   static double phase;
   int16_t *out = (int16_t *)stream;
   unsigned divisor = atomic_load_explicit(&audio_divisor, memory_order_relaxed);
   int gate = atomic_load_explicit(&audio_gate, memory_order_relaxed);
   double step = 1193182.0 / divisor / audio_rate;
-  for (int i = 0; i < len / (int)sizeof(*out); ++i) {
-    out[i] = gate ? (phase < .5 ? 1800 : -1800) : 0;
+  for (int i = 0; i < len / (int)sizeof(*out) / audio_channels; ++i) {
+    for (int c = 0; c < audio_channels; ++c)
+      out[i*audio_channels+c] = gate ? (phase < .5 ? 1800 : -1800) : 0;
     phase += step;
     if (phase >= 1)
       phase -= (unsigned)phase;
@@ -1718,6 +1728,7 @@ static void parse_keys(const char *text) {
 }
 int main(int argc, char **argv) {
   int visibility_selected = 0;
+  int configure_controls = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--data-dir") && i + 1 < argc)
       data_dir = argv[++i];
@@ -1787,6 +1798,8 @@ int main(int argc, char **argv) {
       controller_enabled = 0;
     else if (!strcmp(argv[i], "--list-controllers"))
       list_controllers = 1;
+    else if (!strcmp(argv[i], "--configure-controls"))
+      configure_controls = 1;
     else if (!strcmp(argv[i], "--controls") && i + 1 < argc) {
       controls_path = argv[++i];
       controls_explicit = 1;
@@ -1797,7 +1810,7 @@ int main(int argc, char **argv) {
       puts("Usage: lhx-native [--data-dir bin/dos] [--save-dir saves] "
            "[--headless] [--mute] [--fps 60] [--show-fps] [--seconds N] [--screenshot image.ppm] "
            "[--dump-memory image.bin] "
-           "[--no-controller] [--list-controllers] [--controls controls.ini] "
+           "[--no-controller] [--list-controllers] [--configure-controls] [--controls controls.ini] "
            "[--renderer native|original] [--render-scale 3] "
            "[--backend cpu|gpu] "
            "[--render-stats report.json] "
@@ -1810,6 +1823,10 @@ int main(int argc, char **argv) {
       return 2;
     }
   }
+  if (configure_controls && (headless || list_controllers)) {
+    fprintf(stderr,"--configure-controls cannot be combined with --headless or --list-controllers\n");
+    return 2;
+  }
   if (list_controllers) {
     if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) < 0) {
       fprintf(stderr, "SDL controllers: %s\n", SDL_GetError());
@@ -1820,9 +1837,17 @@ int main(int argc, char **argv) {
     return 0;
   }
   LhxControls config;
-  if (!lhx_controls_load(&config, controls_path, controls_explicit))
+  if (!lhx_controls_load(&config, controls_path, controls_explicit && !configure_controls))
     return 2;
+  if (configure_controls || (!headless && config.show_controller_setup)) {
+    int setup=lhx_controller_setup_run(&config,controls_path);
+    if (setup<=0) return setup<0?2:0;
+  }
   lhx_gamepad_configure(&config);
+  improved_sounds = config.improved_sounds;
+  audio_channels = improved_sounds ? 2 : 1;
+  lhx_sound_init(&enhanced_audio, audio_rate);
+  if (improved_sounds) lhx_audio_observe(lhx_sound_submit, &enhanced_audio);
   if (!renderer_selected && config.rendering.renderer != LHX_RENDER_DEFAULT) {
     native_renderer = config.rendering.renderer == LHX_RENDER_NATIVE;
     renderer_selected = 1;
@@ -1838,6 +1863,8 @@ int main(int argc, char **argv) {
   render_options.runway_textures=config.rendering.runway_textures;
   render_options.antialiasing=config.rendering.antialiasing;
   render_options.sphere_depth=config.rendering.sphere_depth;
+  render_options.hide_ground_dots=config.rendering.hide_ground_dots;
+  render_options.smooth_distant_aircraft=config.rendering.smooth_distant_aircraft;
   render_options.atmosphere=config.rendering.atmosphere;
   render_options.terrain_relief=config.rendering.terrain_relief;
   render_options.shadows=config.rendering.shadows;
@@ -1895,7 +1922,7 @@ int main(int argc, char **argv) {
     SDL_AudioSpec want = {0}, have;
     want.freq = audio_rate;
     want.format = AUDIO_S16SYS;
-    want.channels = 1;
+    want.channels = audio_channels;
     want.samples = 512;
     want.callback = speaker_audio;
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0)
@@ -1906,6 +1933,10 @@ int main(int argc, char **argv) {
       sound_enabled = 0;
     } else {
       audio_rate = have.freq;
+      audio_channels = have.channels;
+      fprintf(stderr, "[audio] %s, %d Hz, %d channel%s\n",
+              improved_sounds ? "improved procedural sounds" : "original PC speaker",
+              audio_rate, audio_channels, audio_channels == 1 ? "" : "s");
       SDL_PauseAudioDevice(audio_device, 0);
     }
   }

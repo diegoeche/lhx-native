@@ -35,6 +35,8 @@ deadzone = 7000
 repeat_delay_ms = 0
 fire_repeat_ms = 50
 throttle_repeat_ms = 400
+[AUDIO]
+improved_sounds = TRUE
 [RENDERING]
 Renderer = ORIGINAL
 render_scale = 1
@@ -43,6 +45,8 @@ show_fps = TRUE
 lighting = true
 antialiasing = TRUE
 sphere_depth = TRUE
+hide_ground_dots = TRUE
+smooth_distant_aircraft = TRUE
 atmosphere = TRUE
 replacement_models = TRUE
 models_dir = /tmp/scenery models
@@ -62,7 +66,8 @@ terrain_dir = /tmp/terrain images
 """)
             native = tmp / "native.ini"
             native.write_text("[rendering]\nrenderer = native\nrender_scale = 8\n"
-                              "visibility = extended\nshow_fps = false\nbackend = cpu\n")
+                              "visibility = extended\nshow_fps = false\nbackend = cpu\nhide_ground_dots = false\nsmooth_distant_aircraft = false\n"
+                              "[audio]\nimproved_sounds = false\n")
             bad_profiles = [
                 "[rendering]\nterrain_relief = yes\n",
                 "[rendering]\nshadows = yes\n",
@@ -105,6 +110,11 @@ terrain_dir = /tmp/terrain images
                 "[rendering]\nphoto_skies = yes\n",
                 "[rendering]\nsky_dir =\n",
                 "[rendering]\nsky_dir = " + "x" * 256 + "\n",
+                "[audio]\nimproved_sounds = yes\n",
+                "[audio]\nimproved_sounds =\n",
+                "[audio]\nunknown = true\n",
+                "[rendering]\nhide_ground_dots = yes\n",
+                "[rendering]\nsmooth_distant_aircraft = yes\n",
             ]
             paths = []
             for index, body in enumerate(bad_profiles):
@@ -120,6 +130,7 @@ int main(int argc,char **argv) {
     assert(argc>=6);
     LhxControls defaults, c, saved;
     lhx_controls_defaults(&defaults);
+    assert(!defaults.improved_sounds);
     assert(defaults.rendering.renderer==LHX_RENDER_DEFAULT);
     assert(defaults.rendering.render_scale==0);
     assert(defaults.rendering.extended_visibility && !defaults.rendering.show_fps);
@@ -127,6 +138,8 @@ int main(int argc,char **argv) {
            !defaults.rendering.terrain_textures);
     assert(!defaults.rendering.antialiasing);
     assert(!defaults.rendering.sphere_depth);
+    assert(!defaults.rendering.hide_ground_dots);
+    assert(!defaults.rendering.smooth_distant_aircraft);
     assert(!defaults.rendering.atmosphere);
     assert(!defaults.rendering.terrain_relief);
     assert(!defaults.rendering.shadows);
@@ -146,11 +159,15 @@ int main(int argc,char **argv) {
     assert(!lhx_controls_load(&c,argv[1],1));
     assert(lhx_controls_load(&c,argv[2],1));
     /* The editable project profile may intentionally differ from defaults. */
+    assert(c.buttons[SDL_CONTROLLER_BUTTON_B]==LHX_VIEW);
+    assert(c.buttons[SDL_CONTROLLER_BUTTON_BACK]==LHX_CANCEL);
+    assert(c.improved_sounds);
     assert(lhx_controls_load(&c,argv[3],1));
     assert(c.buttons[SDL_CONTROLLER_BUTTON_A]==LHX_FIRE);
     assert(c.buttons[SDL_CONTROLLER_BUTTON_X]==LHX_NONE);
     assert(c.buttons[SDL_CONTROLLER_BUTTON_Y]==LHX_FLARES);
-    assert(c.buttons[SDL_CONTROLLER_BUTTON_B]==LHX_CANCEL);
+    assert(c.buttons[SDL_CONTROLLER_BUTTON_B]==LHX_VIEW);
+    assert(c.buttons[SDL_CONTROLLER_BUTTON_BACK]==LHX_CANCEL);
     assert(c.buttons[SDL_CONTROLLER_BUTTON_LEFTSHOULDER]==LHX_PREVIOUS);
     assert(c.axes[SDL_CONTROLLER_AXIS_LEFTY].action==LHX_PITCH);
     assert(c.axes[SDL_CONTROLLER_AXIS_LEFTY].direction==-1);
@@ -158,11 +175,14 @@ int main(int argc,char **argv) {
     assert(c.axes[SDL_CONTROLLER_AXIS_TRIGGERLEFT].action==LHX_AXIS_CHAFF);
     assert(c.deadzone==7000 && c.repeat_delay_ms==0);
     assert(c.fire_repeat_ms==50 && c.throttle_repeat_ms==400);
+    assert(c.improved_sounds);
     assert(c.rendering.renderer==LHX_RENDER_ORIGINAL && c.rendering.render_scale==1);
     assert(!c.rendering.extended_visibility && c.rendering.show_fps);
     assert(c.rendering.lighting && c.rendering.runway_textures && !c.rendering.terrain_textures);
     assert(c.rendering.antialiasing);
     assert(c.rendering.sphere_depth);
+    assert(c.rendering.hide_ground_dots);
+    assert(c.rendering.smooth_distant_aircraft);
     assert(c.rendering.atmosphere);
     assert(c.rendering.terrain_relief);
     assert(c.rendering.shadows);
@@ -180,6 +200,9 @@ int main(int argc,char **argv) {
     saved=c;
     assert(lhx_controls_load(&c,argv[4],1));
     assert(c.rendering.renderer==LHX_RENDER_NATIVE && c.rendering.render_scale==8);
+    assert(!c.rendering.hide_ground_dots);
+    assert(!c.rendering.smooth_distant_aircraft);
+    assert(!c.improved_sounds);
     assert(!c.rendering.gpu);
     assert(c.rendering.extended_visibility && !c.rendering.show_fps);
     c=saved;
@@ -193,7 +216,7 @@ int main(int argc,char **argv) {
             built = subprocess.run([
                 "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 "-I", str(ROOT / "runtime"),
-                str(source), str(ROOT / "runtime/controls.c"),
+                str(source), str(ROOT / "runtime/controls.c"), str(ROOT / "runtime/controller_profile.c"),
                 *shlex.split(flags.stdout), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)

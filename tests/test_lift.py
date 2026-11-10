@@ -251,5 +251,87 @@ int main(int argc,char **argv) {
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class NativeControllerObserver(unittest.TestCase):
+    def test_controller_instruction_identity_and_old_hook_removed(self):
+        self.assertNotIn(0x20D56, lift.LHX_NATIVE_PRE_OBSERVERS)
+        self.assertEqual(lift.LHX_NATIVE_INSTRUCTION_OBSERVERS, {
+            0x00B42: ("lhx_gamepad_apply", bytes.fromhex("80 3e 55 d8 00"))})
+        instruction = decode16.Decoder(bytes.fromhex("80 3e 55 d8 00")).decode_one()
+        self.assertEqual(instruction.mnemonic, "cmp")
+        instruction.offset = 0x00B42
+        instruction.raw = bytes.fromhex("80 3e 55 d8 01")
+        with self.assertRaisesRegex(ValueError, "bytes differ at 00b42"):
+            lift.emit_native_instruction_observer(None, instruction)
+
+    @unittest.skipUnless(shutil.which("cc"), "C compiler required")
+    def test_real_main_save_clear_restore_keeps_tow_input_out_of_helicopter(self):
+        # Exact supported-module instructions 006e:0462..0495, with a far
+        # return appended after the original save/call/restore sequence.
+        raw = bytes.fromhex(
+            "80 3e 55 d8 00 74 14 a1 d6 ea 89 46 8c a1 d8 ea 89 46 f6 "
+            "2b c0 a3 d8 ea a3 d6 ea 9a 16 01 c4 20 "
+            "80 3e 55 d8 00 74 0c 8b 46 8c a3 d6 ea 8b 46 f6 a3 d8 ea cb")
+        decoder = decode16.Decoder(raw)
+        instructions = []
+        while decoder.pos < len(raw):
+            instruction = decoder.decode_one()
+            instruction.address += 0x462
+            instruction.offset += 0xB42
+            for operand in (instruction.op1, instruction.op2):
+                if operand and operand.type in (decode16.OpType.REL8, decode16.OpType.REL16):
+                    operand.disp += 0x462
+            instructions.append(instruction)
+        lifter = lift16.Lifter(known_funcs={0x20D56: "helicopter"})
+        lifter.far_base, lifter.dispatch = 0, True
+        original = lifter.lift_instruction
+
+        def emit(instruction, start):
+            lift.emit_native_instruction_observer(lifter, instruction)
+            return original(instruction, start)
+
+        lifter.lift_instruction = emit
+        lift16._CODE_SEG = "006E"
+        generated = lifter.lift_function("main_axes", instructions, 0x6E, entry_addr=0x462)
+        self.assertEqual(generated.count("lhx_gamepad_apply(cpu);"), 1)
+        header = ROOT / "third_party/pcrecomp/runtime/cpu.h"
+        source = f'#include <assert.h>\n#include <stdlib.h>\n#include "{header}"\n'
+        source += r'''
+#define SEG_006E 0x17e
+static int manual_mode, calls;
+void lhx_gamepad_apply(CPU *c) {
+    calls++;
+    mem_write16(c,c->ds,0xead6,100); mem_write16(c,c->ds,0xead8,45);
+}
+void helicopter(CPU *c) {
+    assert(mem_read16(c,c->ds,0xead6)==(manual_mode?0:100));
+    assert(mem_read16(c,c->ds,0xead8)==(manual_mode?0:45));
+    c->sp+=4;
+}
+void recomp_dispatch(CPU *c,uint16_t s,uint16_t o) {(void)c;(void)s;(void)o;abort();}
+'''
+        source += generated + r'''
+int main(void) {
+    CPU c={0}; c.mem=calloc(1,MEM_SIZE); assert(c.mem);
+    c.ds=0x2000; c.ss=0x3000; c.bp=0x8000;
+    for(manual_mode=0;manual_mode<=1;manual_mode++) {
+        c.sp=0xf000; mem_write16(&c,c.ss,c.sp,0xffff);
+        mem_write16(&c,c.ss,c.sp+2,SEG_006E);
+        mem_write8(&c,c.ds,0xd855,manual_mode);
+        main_axes(&c);
+        assert(mem_read16(&c,c.ds,0xead6)==100);
+        assert(mem_read16(&c,c.ds,0xead8)==45);
+        assert(c.sp==0xf004);
+    }
+    assert(calls==2); free(c.mem); return 0;
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="lhx-tow-lift-") as directory:
+            path, binary = Path(directory) / "probe.c", Path(directory) / "probe"
+            path.write_text(source)
+            subprocess.run(["cc", "-std=c11", "-O2", str(path), "-o", str(binary)],
+                           check=True, capture_output=True, text=True)
+            subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+
+
 if __name__ == "__main__":
     unittest.main()

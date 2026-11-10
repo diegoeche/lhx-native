@@ -11,6 +11,8 @@ typedef struct {
     const LhxTerrain *terrain; /* Optional satellite imagery/elevation, world coordinates. */
     int antialiasing; /* Native world only, before original pixel-art composition. */
     int sphere_depth; /* Depth-test finite spheres, including burning-object smoke. */
+    int hide_ground_dots; /* Only the original ground-reference sphere grid. */
+    int smooth_distant_aircraft; /* Render-only interpolation outside combat range. */
     int atmosphere; /* Distance haze and a continuous terrain/sky horizon. */
     const struct LhxProps *props; /* Optional static scenery replacements. */
     const struct LhxSky *sky;

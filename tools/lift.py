@@ -41,9 +41,12 @@ LHX_NATIVE_PRE_OBSERVERS = {
     # simulation time repeatedly between real timer interrupts.
     0x0bc16: "lhx_frame_pace",
     0x164a8: "lhx_model_compile_point",
-    # The original loop has consumed keyboard/joystick input at this point;
-    # flight integration clamps and samples the cyclic fields in this body.
-    0x20d56: "lhx_gamepad_apply",
+}
+# 006e:0462 is CMP byte DS:[d855],0. Controller axes must arrive before
+# this test and the following TOW save/clear, rather than inside helicopter
+# integration. Both native copies of the original main loop include this site.
+LHX_NATIVE_INSTRUCTION_OBSERVERS = {
+    0x00b42: ("lhx_gamepad_apply", bytes.fromhex("80 3e 55 d8 00")),
 }
 # The authored line backends select direction by replacing these opcode bytes.
 # Each alternative is decoded and compiled here, never decoded at runtime.
@@ -545,6 +548,17 @@ def write_changed(path, data):
         path.write_text(data)
 
 
+def emit_native_instruction_observer(lifter, ins):
+    observer = LHX_NATIVE_INSTRUCTION_OBSERVERS.get(ins.offset)
+    if observer is None:
+        return
+    name, expected = observer
+    if ins.raw != expected:
+        raise ValueError(f"native instruction observer {name} bytes differ at {ins.offset:05x}")
+    lifter._emit_label(ins.address)
+    lifter._emit(f"{name}(cpu);")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, default=Path("bin/dos/LHX.unpacked.EXE"))
@@ -660,6 +674,7 @@ def main():
     def lift_instruction(ins, start):
         before = len(lifter.output)
         modified_displacement(ins)
+        emit_native_instruction_observer(lifter, ins)
         if ins.offset in LHX_SCENE_EVENTS:
             lifter._emit_label(ins.address)
             lifter._emit(f"lhx_scene_event(cpu, 0x{ins.offset:05X});")
@@ -804,6 +819,9 @@ def main():
                 "native_hooks": {f"{a:05x}": name for a, name in hooks.items()},
                 "native_observers": {f"{a:05x}": names for a, names in LHX_NATIVE_OBSERVERS.items()},
                 "native_pre_observers": {f"{a:05x}": name for a, name in LHX_NATIVE_PRE_OBSERVERS.items()},
+                "native_instruction_observers": {
+                    f"{a:05x}": {"name": name, "bytes": raw.hex()}
+                    for a, (name, raw) in LHX_NATIVE_INSTRUCTION_OBSERVERS.items()},
                 "native_post_observers": {f"{a:05x}": name for a, name in LHX_NATIVE_POST_OBSERVERS.items()},
                 "native_scene_instruction_events": [f"{a:05x}" for a in sorted(LHX_SCENE_EVENTS)],
                 "native_scene_cache_bypass": {"check": f"{LHX_SCENE_CACHE_CHECK:05x}",
